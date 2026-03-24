@@ -3,7 +3,7 @@
 ║             SOPHROSYNE               ║
 ║              v1.0.0                  ║
 ║   Coupled Dynamical Systems Solver   ║
-║            by R.S.S.G.              ║
+║            by R.S.S.G.               ║
 ╚══════════════════════════════════════╝
 
 A modular Python framework for simulating mean-field coupled
@@ -954,7 +954,7 @@ def _print_logo():
     ║             SOPHROSYNE               ║
     ║              v1.0.0                  ║
     ║   Coupled Dynamical Systems Solver   ║
-    ║            by R.S.S.G.              ║
+    ║            by R.S.S.G.               ║
     ╚══════════════════════════════════════╝
     """
     print(logo)
