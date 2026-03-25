@@ -1,7 +1,7 @@
 """
 ╔══════════════════════════════════════╗
 ║             SOPHROSYNE               ║
-║              v2.0.0                  ║
+║              v1.0.0                  ║
 ║   Coupled Dynamical Systems Solver   ║
 ║            by R.S.S.G.               ║
 ╚══════════════════════════════════════╝ - Discrete Map Version
