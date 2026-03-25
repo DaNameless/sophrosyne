@@ -56,8 +56,16 @@ Created: 2026
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
+from pathlib import Path
+from joblib import Parallel, delayed
 import warnings
 warnings.filterwarnings('ignore')
+
+try:
+    from mpi4py import MPI
+    _MPI_AVAILABLE = True
+except ImportError:
+    _MPI_AVAILABLE = False
 
 
 # ── Built-in maps ──────────────────────────────────────────────────────────
@@ -106,11 +114,60 @@ class CoupledMapLattice:
         Label used in plot titles and saved filenames.
     """
 
-    def __init__(self, obs_fn, step_fn=None, init_fn=None, name="Map"):
-        self.obs_fn  = obs_fn
-        self.step_fn = step_fn  or (lambda state, fv, eps, h: (1.0 - eps) * fv + eps * h)
-        self.init_fn = init_fn or (lambda N, rng: rng.random(N))
-        self.name    = name
+    def __init__(self, obs_fn, step_fn=None, init_fn=None, name="Map", output_dir="."):
+        self.obs_fn     = obs_fn
+        self.step_fn    = step_fn or (lambda state, fv, eps, h: (1.0 - eps) * fv + eps * h)
+        self.init_fn    = init_fn or (lambda N, rng: rng.random(N))
+        self.name       = name
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def _savepath(self, fname):
+        """Return full path for a figure filename inside output_dir."""
+        return self.output_dir / fname
+
+    # ── Built-in map constructors ──────────────────────────────────────────
+    @classmethod
+    def from_tent(cls, a=1.99, output_dir="."):
+        return cls(
+            obs_fn     = lambda x: tent(x, a=a),
+            name       = f"tent_a{a}",
+            output_dir = output_dir,
+        )
+
+    @classmethod
+    def from_logistic(cls, r=3.9, output_dir="."):
+        return cls(
+            obs_fn     = lambda x: logistic(x, r=r),
+            name       = f"logistic_r{r}",
+            output_dir = output_dir,
+        )
+
+    @classmethod
+    def from_lozi(cls, a=1.7, b=0.5, output_dir="."):
+        def obs(state):
+            x, y = state
+            return lozi_f(x, y, a=a)
+
+        def step(state, fxy, eps, h):
+            x, _ = state
+            return (1.0 - eps) * fxy + eps * h,  b * x
+
+        def init(N, rng):
+            x = rng.uniform(-1, 1, N)
+            return x, b * x + rng.uniform(-0.01, 0.01, N)
+
+        return cls(obs_fn=obs, step_fn=step, init_fn=init,
+                   name=f"lozi_a{a}_b{b}", output_dir=output_dir)
+
+    # ── MPI helper ────────────────────────────────────────────────────────
+    @staticmethod
+    def _mpi():
+        """Return (comm, rank, size). Falls back to (None, 0, 1) without mpi4py."""
+        if _MPI_AVAILABLE:
+            comm = MPI.COMM_WORLD
+            return comm, comm.Get_rank(), comm.Get_size()
+        return None, 0, 1
 
     # ── Core simulation ────────────────────────────────────────────────────
     def simulate(self, N, eps, T_total=5000, T_transient=2000, seed=None,
@@ -137,6 +194,71 @@ class CoupledMapLattice:
             state = step(state, f_val, eps, h)
 
         return h_series
+
+    # ── Trajectory plot ────────────────────────────────────────────────────
+    def plot_trajectories(self, N, eps, n_show=5,
+                          T_total=3000, T_transient=2000,
+                          seed=None, save=True):
+        """
+        Evolve the system and plot the last (T_total - T_transient) steps.
+
+        Parameters
+        ----------
+        N       : total number of particles in the simulation
+        eps     : coupling strength
+        n_show  : how many individual particle trajectories to overlay
+        save    : whether to save the figure to output_dir
+        """
+        f    = self.obs_fn
+        step = self.step_fn
+        init = self.init_fn
+
+        rng   = np.random.default_rng(seed)
+        state = init(N, rng)
+
+        T_rec = T_total - T_transient
+        # record the x-component of each tracked particle and h_t
+        x_tracks = np.empty((T_rec, n_show))
+        h_series = np.empty(T_rec)
+
+        # pick n_show particle indices to track
+        rng2    = np.random.default_rng((seed or 0) + 1)
+        indices = rng2.choice(N, size=n_show, replace=False)
+
+        for t in range(T_total):
+            f_val = f(state)
+            h     = np.mean(f_val)
+            state = step(state, f_val, eps, h)
+
+            if t >= T_transient:
+                i = t - T_transient
+                h_series[i] = h
+                # extract x-component (works for 1D array or tuple)
+                x = state[0] if isinstance(state, tuple) else state
+                x_tracks[i] = x[indices]
+
+        time = np.arange(T_rec)
+
+        fig, ax = plt.subplots(figsize=(14, 5))
+        for j in range(n_show):
+            ax.plot(time, x_tracks[:, j], lw=0.7, alpha=0.6,
+                    label=f'particle {indices[j]}')
+        ax.plot(time, h_series, 'k-', lw=1.5, label='$h_t$ (mean field)')
+
+        ax.set_xlabel('Time step', fontsize=12)
+        ax.set_ylabel('$x$', fontsize=12)
+        ax.set_title(f'Trajectories  ({self.name},  N={N},  eps={eps})', fontsize=13)
+        ax.legend(fontsize=9, ncol=2)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save:
+            fname = f'{self.name}_eps{eps}_N{N}_trajectories.png'
+            plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+            print(f'  -> Saved {fname}')
+
+        plt.show()
+        plt.close()
 
     def _system_escapes(self, N, eps, T_total=4000, x_bound=100,
                         n_trials=3, seed=42,
@@ -194,7 +316,7 @@ class CoupledMapLattice:
         plt.suptitle(f'Mean Field Time Series ({self.name}, eps={eps})', fontsize=14, y=1.01)
         plt.tight_layout()
         fname = f'./{self.name}_eps{eps}_timeseries.png'
-        plt.savefig(fname, dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
@@ -250,7 +372,7 @@ class CoupledMapLattice:
 
         plt.tight_layout()
         fname = f'./{self.name}_eps{eps}_scaling.png'
-        plt.savefig(fname, dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
@@ -271,6 +393,10 @@ class CoupledMapLattice:
 
         for i, N in enumerate(N_values):
             h = self.simulate(N, eps, T_total=12000, T_transient=2000, seed=42)
+            h = h[np.isfinite(h)]
+            if len(h) == 0:
+                print(f"  N={N:>6d}: simulation diverged, skipping")
+                continue
             h_mean, h_std = np.mean(h), np.std(h)
             rescaled = (h - h_mean) * np.sqrt(N)
             all_rescaled[N] = rescaled
@@ -281,7 +407,11 @@ class CoupledMapLattice:
             axes[0].hist(h, bins=60, density=True, alpha=0.5, color=colors[i], label=f'N={N}')
             axes[1].hist(rescaled, bins=60, density=True, alpha=0.5, color=colors[i], label=f'N={N}')
 
-        ref_std = np.std(all_rescaled[N_values[-1]])
+        last_key = next((N for N in reversed(N_values) if N in all_rescaled), None)
+        if last_key is None:
+            print("  All simulations diverged. Skipping plots.")
+            plt.close(); return
+        ref_std = np.std(all_rescaled[last_key])
         xg = np.linspace(-4 * ref_std, 4 * ref_std, 200)
         axes[1].plot(xg, stats.norm.pdf(xg, 0, ref_std), 'k-', lw=2, label='Gaussian')
 
@@ -293,14 +423,17 @@ class CoupledMapLattice:
         axes[1].set_title('Rescaled (should collapse)'); axes[1].legend()
         axes[1].grid(True, alpha=0.3)
 
-        h_largest = self.simulate(N_values[-1], eps, T_total=12000, T_transient=2000, seed=42)
-        z = (h_largest - np.mean(h_largest)) / np.std(h_largest)
-        stats.probplot(z, dist="norm", plot=axes[2])
-        axes[2].set_title(f'Q-Q Plot (N={N_values[-1]})'); axes[2].grid(True, alpha=0.3)
+        h_largest = self.simulate(last_key, eps, T_total=12000, T_transient=2000, seed=42)
+        h_largest = h_largest[np.isfinite(h_largest)]
+        if len(h_largest) > 0:
+            z = (h_largest - np.mean(h_largest)) / np.std(h_largest)
+            stats.probplot(z, dist="norm", plot=axes[2])
+        axes[2].set_title(f'Q-Q Plot (N={last_key})'); axes[2].grid(True, alpha=0.3)
 
         plt.tight_layout()
         fname = f'./{self.name}_eps{eps}_distribution.png'
-        plt.savefig(fname, dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+        plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
 
@@ -362,39 +495,54 @@ class CoupledMapLattice:
         ax.legend(); ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
-        plt.show()
+
         fname = f'./{self.name}_eps{eps}_self_consistency.png'
-        plt.savefig(fname, dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+        plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
 
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 5: Phase diagram — alpha(eps)
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_phase_diagram(self, eps_values=None, N_values=(100, 1000, 10000, 100000)):
+    def analysis_phase_diagram(self, eps_values=None, N_values=(100, 1000, 10000, 100000),
+                               n_jobs=1):
         if eps_values is None:
             eps_values = np.arange(0.02, 0.52, 0.03)
-        print("=" * 60)
-        print(f"ANALYSIS 5: Phase diagram alpha(eps)  ({self.name})")
-        print("=" * 60)
+        comm, rank, size = self._mpi()
+        if rank == 0:
+            print("=" * 60)
+            print(f"ANALYSIS 5: Phase diagram alpha(eps)  ({self.name})")
+            print("=" * 60)
 
         N_arr = np.array(N_values, dtype=float)
-        alphas, alpha_errors = [], []
 
-        for eps in eps_values:
-            sigmas = []
-            for N in N_values:
-                h = self.simulate(N, eps, T_total=6000, T_transient=2000, seed=42)
-                sigmas.append(np.std(h))
-            sigmas = np.array(sigmas)
-            slope, intercept, r, p, se = stats.linregress(np.log(N_arr),
-                                                           np.log(sigmas + 1e-15))
-            alphas.append(-slope)
-            alpha_errors.append(se)
-            print(f"  eps={eps:.2f}:  alpha = {-slope:.4f} +/- {se:.4f}  (R^2={r**2:.4f})")
+        def _compute_eps(i, eps):
+            sigmas = [np.std(self.simulate(N, eps, T_total=6000, T_transient=2000, seed=42))
+                      for N in N_values]
+            slope, _, r, _, se = stats.linregress(np.log(N_arr),
+                                                   np.log(np.array(sigmas) + 1e-15))
+            return i, -slope, se
 
-        alphas       = np.array(alphas)
-        alpha_errors = np.array(alpha_errors)
+        if size > 1:   # MPI
+            my_indices = list(range(rank, len(eps_values), size))
+            my_results = [_compute_eps(i, eps_values[i]) for i in my_indices]
+            all_results = comm.gather(my_results, root=0)
+            if rank != 0:
+                return
+            all_results = sorted([r for sub in all_results for r in sub], key=lambda x: x[0])
+        else:           # joblib
+            all_results = Parallel(n_jobs=n_jobs)(
+                delayed(_compute_eps)(i, eps) for i, eps in enumerate(eps_values)
+            )
+            all_results = sorted(all_results, key=lambda x: x[0])
+
+        for _, alpha, se in all_results:
+            print(f"  eps={eps_values[all_results.index((_, alpha, se))%len(eps_values)]:.2f}:"
+                  f"  alpha = {alpha:.4f} +/- {se:.4f}")
+
+        alphas       = np.array([r[1] for r in all_results])
+        alpha_errors = np.array([r[2] for r in all_results])
 
         fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
@@ -418,9 +566,9 @@ class CoupledMapLattice:
         ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
-        plt.show()
         fname = f'./{self.name}_phase_diagram.png'
-        plt.savefig(fname, dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+        plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
 
@@ -468,7 +616,7 @@ class CoupledMapLattice:
                 f_val = f_obs(state)
                 state = f_step(state, f_val, eps, h_bar)
                 x = state[0] if isinstance(state, tuple) else state
-                if not np.isfinite(x[0]) or abs(x[0]) > 1e6:
+                if not np.isfinite(x[0]) or abs(x[0]) > 100:
                     escaped = True
                     break
 
@@ -479,7 +627,7 @@ class CoupledMapLattice:
                 f_val = f_obs(state)
                 state = f_step(state, f_val, eps, h_bar)
                 x = state[0] if isinstance(state, tuple) else state
-                if not np.isfinite(x[0]) or abs(x[0]) > 1e6:
+                if not np.isfinite(x[0]) or abs(x[0]) > 100:
                     break
                 all_param.append(p)
                 all_x.append(float(x[0]))
@@ -493,11 +641,12 @@ class CoupledMapLattice:
         else:
             title = f'(1-eps)*f(state) + eps*h_bar  ({self.name}, eps={eps_fixed}, h_bar={h_bar})'
         ax.set_title(title, fontsize=13)
+        ax.set_ylim(-1,2)
         ax.grid(True, alpha=0.3)
+        fname = f'./{self.name}_bifurcation_{bifurcation_param}.png'
+        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
         plt.show()
         plt.tight_layout()
-        fname = f'./{self.name}_bifurcation_{bifurcation_param}.png'
-        plt.savefig(fname, dpi=150, bbox_inches='tight')
         plt.close()
         print(f"  -> Saved {fname}\n")
 
@@ -519,7 +668,7 @@ class CoupledMapLattice:
             Sweep a map parameter. Requires map_factory(p) -> CoupledMapLattice
             (or a plain 1D callable).
         """
-        print("=" * 60)
+        comm, rank, size = self._mpi()
         if sweep == 'eps':
             param_values = np.linspace(eps_range[0], eps_range[1], n_param)
             xlabel, fixed_label = 'eps', self.name
@@ -531,13 +680,17 @@ class CoupledMapLattice:
         else:
             raise ValueError("sweep must be 'eps' or 'map_param'")
 
-        print(f"ANALYSIS 6: Mean-field bifurcation  ({self.name}, sweep={sweep}, N={N})")
-        print("=" * 60)
+        if rank == 0:
+            print("=" * 60)
+            print(f"ANALYSIS 6: Mean-field bifurcation  ({self.name}, sweep={sweep}, N={N})")
+            print("=" * 60)
 
-        all_param, all_h = [], []
         n_keep = 300
+        my_pairs = []   # list of (param_value, h_value)
 
-        for i, p in enumerate(param_values):
+        my_indices = list(range(rank, len(param_values), size))
+        for count, i in enumerate(my_indices):
+            p = param_values[i]
             if sweep == 'eps':
                 f_obs, f_step, f_init, eps = self.obs_fn, self.step_fn, self.init_fn, p
             else:
@@ -547,16 +700,22 @@ class CoupledMapLattice:
             h = self.simulate(N, eps, T_total=T_total, T_transient=T_transient,
                               seed=seed, obs_fn=f_obs, step_fn=f_step, init_fn=f_init)
             h_tail = h[-n_keep:]
-            mask   = np.isfinite(h_tail) & (np.abs(h_tail) < 1e6)
-            for hv in h_tail[mask]:
-                all_param.append(p)
-                all_h.append(hv)
+            mask   = np.isfinite(h_tail) & (np.abs(h_tail) < 20)
+            my_pairs.extend((p, hv) for hv in h_tail[mask])
 
-            if (i + 1) % 100 == 0:
-                print(f"  {i+1}/{n_param} done")
+            if (count + 1) % 50 == 0:
+                print(f"  [rank {rank}] {count+1}/{len(my_indices)} done")
 
-        all_param = np.array(all_param)
-        all_h     = np.array(all_h)
+        if comm is not None:
+            all_pairs = comm.gather(my_pairs, root=0)
+            if rank != 0:
+                return
+            all_pairs = [item for sub in all_pairs for item in sub]
+        else:
+            all_pairs = my_pairs
+
+        all_param = np.array([p for p, _ in all_pairs])
+        all_h     = np.array([h for _, h in all_pairs])
         print(f"  Total points: {len(all_h)}")
 
         fig, ax = plt.subplots(figsize=(14, 7))
@@ -574,7 +733,7 @@ class CoupledMapLattice:
         plt.tight_layout()
         fname = (f'./{self.name}_meanfield_bif_{sweep}_'
                  f'{fixed_label.replace("=", "")}_N{N}.png')
-        plt.savefig(fname, dpi=200, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=200, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
@@ -608,7 +767,7 @@ class CoupledMapLattice:
         """
         sweep : 'eps' or 'map_param' (requires map_factory).
         """
-        print("=" * 60)
+        comm, rank, size = self._mpi()
         if sweep == 'eps':
             param_values = np.linspace(eps_range[0], eps_range[1], n_param)
             fixed_label, xlabel = self.name, 'eps'
@@ -620,12 +779,15 @@ class CoupledMapLattice:
         else:
             raise ValueError("sweep must be 'eps' or 'map_param'")
 
-        print(f"ANALYSIS 7: Minimum N to prevent escape  ({self.name}, sweep={sweep})")
-        print("=" * 60)
+        if rank == 0:
+            print("=" * 60)
+            print(f"ANALYSIS 7: Minimum N to prevent escape  ({self.name}, sweep={sweep})")
+            print("=" * 60)
 
-        results_param, results_N = [], []
-
-        for p in param_values:
+        my_indices = list(range(rank, len(param_values), size))
+        my_results = []
+        for i in my_indices:
+            p = param_values[i]
             if sweep == 'eps':
                 f_obs, f_step, f_init, eps = self.obs_fn, self.step_fn, self.init_fn, p
             else:
@@ -635,10 +797,20 @@ class CoupledMapLattice:
             Nc = self.find_min_N(eps, N_min=N_min, N_max=N_max, T_total=T_total,
                                   x_bound=x_bound, n_trials=n_trials, seed=seed,
                                   obs_fn=f_obs, step_fn=f_step, init_fn=f_init)
-            results_param.append(p)
-            results_N.append(Nc)
+            my_results.append((i, p, Nc))
             Nc_str = f"{Nc}" if Nc is not None else f"> {N_max}"
-            print(f"  {xlabel}={p:.4f}:  N_min = {Nc_str}")
+            print(f"  [rank {rank}] {xlabel}={p:.4f}:  N_min = {Nc_str}")
+
+        if comm is not None:
+            all_results = comm.gather(my_results, root=0)
+            if rank != 0:
+                return None, None
+            all_results = sorted([r for sub in all_results for r in sub], key=lambda x: x[0])
+        else:
+            all_results = my_results
+
+        results_param = [r[1] for r in all_results]
+        results_N     = [r[2] for r in all_results]
 
         p_finite = [p for p, n in zip(results_param, results_N) if n is not None]
         N_finite = [n for n in results_N if n is not None]
@@ -662,7 +834,7 @@ class CoupledMapLattice:
 
         plt.tight_layout()
         fname = f'./{self.name}_min_N_escape_{sweep}.png'
-        plt.savefig(fname, dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
@@ -684,47 +856,14 @@ class CoupledMapLattice:
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
 
-    # ── 1D: Tent map ──────────────────────────────────────────────────────
-    sys_tent = CoupledMapLattice(lambda x: tent(x, a=1.99), name="tent_a1.99")
-    sys_tent.run_all(eps=0.1)
+    # ── Built-in maps ──────────────────────────────────────────────────────
+    CoupledMapLattice.from_tent(a=1.99).run_all(eps=0.1)
+    CoupledMapLattice.from_logistic(r=3.9).run_all(eps=0.1)
+    CoupledMapLattice.from_lozi(a=1.7, b=0.5).run_all(eps=0.1)
 
-    # ── 2D: Lozi map ──────────────────────────────────────────────────────
-    # The Lozi map has a 2D state (x, y) per particle.
-    # obs_fn  : f(x, y) = 1 - a|x| + y   (feeds into h_t)
-    # step_fn : x_{t+1} = (1-eps)*f + eps*h,  y_{t+1} = b*x_t
-    # init_fn : start near the attractor
-
-    A_LOZI, B_LOZI = 1.7, 0.5
-
-    def _lozi_obs(state):
-        x, y = state
-        return lozi_f(x, y, a=A_LOZI)
-
-    def _lozi_step(state, fxy, eps, h):
-        x, _ = state
-        return (1.0 - eps) * fxy + eps * h,  B_LOZI * x
-
-    def _lozi_init(N, rng):
-        x = rng.uniform(-1, 1, N)
-        return x, B_LOZI * x + rng.uniform(-0.01, 0.01, N)
-
-    sys_lozi = CoupledMapLattice(_lozi_obs, step_fn=_lozi_step,
-                                 init_fn=_lozi_init, name="lozi_a1.7_b0.5")
-    sys_lozi.run_all(eps=0.1)
-
-    # ── Sweep a map parameter across analyses ─────────────────────────────
-    # For tent: factory returns a CoupledMapLattice for each value of 'a'
-    # tent_factory = lambda a: CoupledMapLattice(lambda x: tent(x, a=a),
-    #                                            name=f"tent_a{a:.2f}")
-    # sys_tent.analysis_meanfield_bifurcation(
-    #     sweep='map_param', map_factory=tent_factory,
-    #     param_range=(0.5, 2.0), eps_fixed=0.1)
-
-    # For Lozi: sweep 'a' with fixed b and eps
-    # def lozi_factory(a):
-    #     def obs(state): x, y = state; return lozi_f(x, y, a=a)
-    #     return CoupledMapLattice(obs, step_fn=_lozi_step,
-    #                              init_fn=_lozi_init, name=f"lozi_a{a:.2f}")
-    # sys_lozi.analysis_meanfield_bifurcation(
-    #     sweep='map_param', map_factory=lozi_factory,
+    # ── Sweep a map parameter (example) ───────────────────────────────────
+    # sys = CoupledMapLattice.from_lozi(a=1.7, b=0.5)
+    # sys.analysis_meanfield_bifurcation(
+    #     sweep='map_param',
+    #     map_factory=lambda a: CoupledMapLattice.from_lozi(a=a, b=0.5),
     #     param_range=(1.0, 2.0), eps_fixed=0.1)
