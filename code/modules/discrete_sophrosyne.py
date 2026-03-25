@@ -658,7 +658,7 @@ class CoupledMapLattice:
                                        map_factory=None, param_range=(0.5, 3.0),
                                        N=10000, n_param=500,
                                        T_total=6000, T_transient=4000,
-                                       seed=42):
+                                       seed=42, n_jobs=1):
         """
         Bifurcation diagram of the mean field h_t from the full N-body simulation.
 
@@ -686,33 +686,31 @@ class CoupledMapLattice:
             print("=" * 60)
 
         n_keep = 300
-        my_pairs = []   # list of (param_value, h_value)
 
-        my_indices = list(range(rank, len(param_values), size))
-        for count, i in enumerate(my_indices):
-            p = param_values[i]
+        def _compute_param(p):
             if sweep == 'eps':
                 f_obs, f_step, f_init, eps = self.obs_fn, self.step_fn, self.init_fn, p
             else:
                 f_obs, f_step, f_init = self._resolve_factory(p, map_factory)
                 eps = eps_fixed
-
             h = self.simulate(N, eps, T_total=T_total, T_transient=T_transient,
                               seed=seed, obs_fn=f_obs, step_fn=f_step, init_fn=f_init)
             h_tail = h[-n_keep:]
             mask   = np.isfinite(h_tail) & (np.abs(h_tail) < 20)
-            my_pairs.extend((p, hv) for hv in h_tail[mask])
+            return [(p, hv) for hv in h_tail[mask]]
 
-            if (count + 1) % 50 == 0:
-                print(f"  [rank {rank}] {count+1}/{len(my_indices)} done")
-
-        if comm is not None:
-            all_pairs = comm.gather(my_pairs, root=0)
+        if size > 1:   # MPI
+            my_indices = list(range(rank, len(param_values), size))
+            my_pairs = [pair for i in my_indices for pair in _compute_param(param_values[i])]
+            all_gathered = comm.gather(my_pairs, root=0)
             if rank != 0:
                 return
-            all_pairs = [item for sub in all_pairs for item in sub]
-        else:
-            all_pairs = my_pairs
+            all_pairs = [item for sub in all_gathered for item in sub]
+        else:           # joblib
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(_compute_param)(p) for p in param_values
+            )
+            all_pairs = [item for sub in results for item in sub]
 
         all_param = np.array([p for p, _ in all_pairs])
         all_h     = np.array([h for _, h in all_pairs])
@@ -763,7 +761,8 @@ class CoupledMapLattice:
                               eps_range=(0.0, 0.5), eps_fixed=0.1,
                               map_factory=None, param_range=(1.0, 3.0),
                               n_param=60, N_min=2, N_max=100000,
-                              T_total=4000, x_bound=100, n_trials=3, seed=42):
+                              T_total=4000, x_bound=100, n_trials=3, seed=42,
+                              n_jobs=1):
         """
         sweep : 'eps' or 'map_param' (requires map_factory).
         """
@@ -784,30 +783,31 @@ class CoupledMapLattice:
             print(f"ANALYSIS 7: Minimum N to prevent escape  ({self.name}, sweep={sweep})")
             print("=" * 60)
 
-        my_indices = list(range(rank, len(param_values), size))
-        my_results = []
-        for i in my_indices:
-            p = param_values[i]
+        def _compute_param(i, p):
             if sweep == 'eps':
                 f_obs, f_step, f_init, eps = self.obs_fn, self.step_fn, self.init_fn, p
             else:
                 f_obs, f_step, f_init = self._resolve_factory(p, map_factory)
                 eps = eps_fixed
-
             Nc = self.find_min_N(eps, N_min=N_min, N_max=N_max, T_total=T_total,
                                   x_bound=x_bound, n_trials=n_trials, seed=seed,
                                   obs_fn=f_obs, step_fn=f_step, init_fn=f_init)
-            my_results.append((i, p, Nc))
             Nc_str = f"{Nc}" if Nc is not None else f"> {N_max}"
-            print(f"  [rank {rank}] {xlabel}={p:.4f}:  N_min = {Nc_str}")
+            print(f"  {xlabel}={p:.4f}:  N_min = {Nc_str}")
+            return i, p, Nc
 
-        if comm is not None:
+        if size > 1:   # MPI
+            my_indices = list(range(rank, len(param_values), size))
+            my_results = [_compute_param(i, param_values[i]) for i in my_indices]
             all_results = comm.gather(my_results, root=0)
             if rank != 0:
                 return None, None
             all_results = sorted([r for sub in all_results for r in sub], key=lambda x: x[0])
-        else:
-            all_results = my_results
+        else:           # joblib
+            all_results = Parallel(n_jobs=n_jobs)(
+                delayed(_compute_param)(i, p) for i, p in enumerate(param_values)
+            )
+            all_results = sorted(all_results, key=lambda x: x[0])
 
         results_param = [r[1] for r in all_results]
         results_N     = [r[2] for r in all_results]
