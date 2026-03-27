@@ -54,6 +54,7 @@ Created: 2026
 """
 
 import numpy as np
+import matplotlib
 import matplotlib.pyplot as plt
 from scipy import stats
 from pathlib import Path
@@ -66,6 +67,86 @@ try:
     _MPI_AVAILABLE = True
 except ImportError:
     _MPI_AVAILABLE = False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PUBLICATION FIGURE STYLE — Physical Review / APS
+# ══════════════════════════════════════════════════════════════════════════════
+# Grayscale palette: curves are distinguished by linestyle, not colour.
+# Serif text (Computer Modern maths), inward ticks on all four sides,
+# no background grid.  Figures are sized for a two-column APS layout
+# (single-column width ≈ 3.4 in, double ≈ 7.0 in).
+
+STYLE_RC = {
+    # ── Typography ─────────────────────────────────────────────────────
+    'font.family':        'serif',
+    'font.serif':         ['DejaVu Serif', 'Times New Roman', 'Times'],
+    'font.size':           9,
+    'axes.labelsize':      10,
+    'axes.titlesize':      10,
+    'xtick.labelsize':     8,
+    'ytick.labelsize':     8,
+    'legend.fontsize':     7.5,
+    'mathtext.fontset':    'cm',
+
+    # ── Axes frame ─────────────────────────────────────────────────────
+    'axes.linewidth':      0.6,
+    'axes.grid':           False,
+
+    # ── Ticks — inward on all four sides ───────────────────────────────
+    'xtick.direction':     'in',
+    'ytick.direction':     'in',
+    'xtick.top':           True,
+    'ytick.right':         True,
+    'xtick.major.width':   0.5,
+    'ytick.major.width':   0.5,
+    'xtick.minor.width':   0.35,
+    'ytick.minor.width':   0.35,
+    'xtick.major.size':    3.5,
+    'ytick.major.size':    3.5,
+    'xtick.minor.size':    2.0,
+    'ytick.minor.size':    2.0,
+
+    # ── Legend ─────────────────────────────────────────────────────────
+    'legend.frameon':      False,
+
+    # ── Figure output ──────────────────────────────────────────────────
+    'figure.dpi':          150,
+    'savefig.dpi':         300,
+    'figure.constrained_layout.use': True,
+}
+
+# Four-level grayscale + linestyle cycle (extend if more curves needed)
+COLORS     = ['#000000', '#555555', '#999999', '#BBBBBB']
+LINESTYLES = ['-', '--', '-.', ':']
+MARKERS    = ['o', 's', '^', 'D', 'v', 'p']
+
+# Convenience: one-column and two-column widths (inches)
+FIG_WIDTH_1COL = 3.4
+FIG_WIDTH_2COL = 7.0
+
+
+def _apply_style():
+    """Push the publication rcParams into matplotlib's global state."""
+    matplotlib.rcParams.update(STYLE_RC)
+
+
+def _panel_label(ax, label, x=-0.1, y=1.08):
+    """Add a bold panel label, e.g. '(a)', to an axes."""
+    ax.text(x, y, label, transform=ax.transAxes,
+            fontsize=11, fontweight='bold', va='top')
+
+
+def _color(i):
+    return COLORS[i % len(COLORS)]
+
+
+def _ls(i):
+    return LINESTYLES[i % len(LINESTYLES)]
+
+
+def _marker(i):
+    return MARKERS[i % len(MARKERS)]
 
 
 # ── Built-in maps ──────────────────────────────────────────────────────────
@@ -111,15 +192,21 @@ class CoupledMapLattice:
         Defaults to rng.random(N) for 1D maps.
 
     name : str
-        Label used in plot titles and saved filenames.
+        Label used in saved filenames (no LaTeX).
+
+    param_label : str, optional
+        LaTeX-safe label shown in plot titles (e.g. r'$a=1.99$').
+        Defaults to *name* if not provided.
     """
 
-    def __init__(self, obs_fn, step_fn=None, init_fn=None, name="Map", output_dir="."):
-        self.obs_fn     = obs_fn
-        self.step_fn    = step_fn or (lambda state, fv, eps, h: (1.0 - eps) * fv + eps * h)
-        self.init_fn    = init_fn or (lambda N, rng: rng.random(N))
-        self.name       = name
-        self.output_dir = Path(output_dir)
+    def __init__(self, obs_fn, step_fn=None, init_fn=None, name="Map",
+                 param_label=None, output_dir="."):
+        self.obs_fn      = obs_fn
+        self.step_fn     = step_fn or (lambda state, fv, eps, h: (1.0 - eps) * fv + eps * h)
+        self.init_fn     = init_fn or (lambda N, rng: rng.random(N))
+        self.name        = name          # used in filenames (no LaTeX)
+        self.param_label = param_label or name  # used in plot titles
+        self.output_dir  = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def _savepath(self, fname):
@@ -130,17 +217,19 @@ class CoupledMapLattice:
     @classmethod
     def from_tent(cls, a=1.99, output_dir="."):
         return cls(
-            obs_fn     = lambda x: tent(x, a=a),
-            name       = f"tent_a{a}",
-            output_dir = output_dir,
+            obs_fn      = lambda x: tent(x, a=a),
+            name        = f"tent_a{a}",
+            param_label = rf"$a={a}$",
+            output_dir  = output_dir,
         )
 
     @classmethod
     def from_logistic(cls, r=3.9, output_dir="."):
         return cls(
-            obs_fn     = lambda x: logistic(x, r=r),
-            name       = f"logistic_r{r}",
-            output_dir = output_dir,
+            obs_fn      = lambda x: logistic(x, r=r),
+            name        = f"logistic_r{r}",
+            param_label = rf"$r={r}$",
+            output_dir  = output_dir,
         )
 
     @classmethod
@@ -158,7 +247,9 @@ class CoupledMapLattice:
             return x, b * x + rng.uniform(-0.01, 0.01, N)
 
         return cls(obs_fn=obs, step_fn=step, init_fn=init,
-                   name=f"lozi_a{a}_b{b}", output_dir=output_dir)
+                   name=f"lozi_a{a}_b{b}",
+                   param_label=rf"$a={a},\; b={b}$",
+                   output_dir=output_dir)
 
     # ── MPI helper ────────────────────────────────────────────────────────
     @staticmethod
@@ -209,6 +300,8 @@ class CoupledMapLattice:
         n_show  : how many individual particle trajectories to overlay
         save    : whether to save the figure to output_dir
         """
+        _apply_style()
+
         f    = self.obs_fn
         step = self.step_fn
         init = self.init_fn
@@ -239,22 +332,24 @@ class CoupledMapLattice:
 
         time = np.arange(T_rec)
 
-        fig, ax = plt.subplots(figsize=(14, 5))
+        fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4))
         for j in range(n_show):
-            ax.plot(time, x_tracks[:, j], lw=0.7, alpha=0.6,
-                    label=f'particle {indices[j]}')
-        ax.plot(time, h_series, 'k-', lw=1.5, label='$h_t$ (mean field)')
+            ax.plot(time, x_tracks[:, j], lw=0.5, alpha=0.6,
+                    color=_color(j), ls=_ls(j),
+                    label=f'element {indices[j]}')
+        ax.plot(time, h_series, color='#000000', lw=1.2,
+                label=r'$h_t$ (mean field)')
 
-        ax.set_xlabel('Time step', fontsize=12)
-        ax.set_ylabel('$x$', fontsize=12)
-        ax.set_title(f'Trajectories  ({self.name},  N={N},  eps={eps})', fontsize=13)
-        ax.legend(fontsize=9, ncol=2)
-        ax.grid(True, alpha=0.3)
+        ax.set_xlabel(r'Time step')
+        ax.set_ylabel(r'$x$')
+        ax.set_title(rf'Trajectories  ({self.param_label},  $N={N}$,  '
+                     rf'$\varepsilon={eps}$)')
+        ax.legend(fontsize=7, ncol=2)
         plt.tight_layout()
 
         if save:
             fname = f'{self.name}_eps{eps}_N{N}_trajectories.png'
-            plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
             print(f'  -> Saved {fname}')
 
         plt.show()
@@ -296,27 +391,36 @@ class CoupledMapLattice:
     # ANALYSIS 1: Time series visualization
     # ══════════════════════════════════════════════════════════════════════
     def analysis_timeseries(self, eps, N_values=(100, 1000, 10000, 100000)):
+        _apply_style()
+
         print("=" * 60)
         print(f"ANALYSIS 1: Time series of h_t  ({self.name}, eps={eps})")
         print("=" * 60)
 
-        fig, axes = plt.subplots(len(N_values), 1, figsize=(14, 10), sharex=True)
+        fig, axes = plt.subplots(len(N_values), 1,
+                                 figsize=(FIG_WIDTH_2COL, 2.2 * len(N_values)),
+                                 sharex=True)
         T_show = 200
 
-        for ax, N in zip(axes, N_values):
-            h = self.simulate(N, eps, T_total=T_show + 10000, T_transient=10000, seed=42)
+        for idx, (ax, N) in enumerate(zip(axes, N_values)):
+            h = self.simulate(N, eps, T_total=T_show + 10000,
+                              T_transient=10000, seed=42)
             h = h[:T_show]
-            ax.plot(h, 'b-', linewidth=0.5, alpha=0.8)
-            ax.axhline(y=np.mean(h), color='r', linestyle='--', alpha=0.5)
-            ax.set_ylabel('$h_t$', fontsize=11)
-            ax.set_title(f'N = {N}   (sigma = {np.std(h):.5f})', fontsize=12)
-            ax.grid(True, alpha=0.3)
+            ax.plot(h, color=_color(0), ls=_ls(0), linewidth=0.5, alpha=0.8)
+            ax.axhline(y=np.mean(h), color=_color(1), linestyle='--',
+                       linewidth=0.7, alpha=0.6)
+            ax.set_ylabel(r'$h_t$')
+            ax.set_title(rf'$N = {N}$   '
+                         rf'($\sigma = {np.std(h):.5f}$)')
+            _panel_label(ax, f'({chr(97 + idx)})')
 
-        axes[-1].set_xlabel('Time step', fontsize=12)
-        plt.suptitle(f'Mean Field Time Series ({self.name}, eps={eps})', fontsize=14, y=1.01)
+        axes[-1].set_xlabel('Time step')
+        plt.suptitle(rf'Mean Field Time Series ({self.param_label}, '
+                     rf'$\varepsilon={eps}$)',
+                     fontsize=11, y=1.01)
         plt.tight_layout()
         fname = f'./{self.name}_eps{eps}_timeseries.png'
-        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
@@ -325,6 +429,8 @@ class CoupledMapLattice:
     # ANALYSIS 2: Fluctuation scaling  sigma_h  vs  N
     # ══════════════════════════════════════════════════════════════════════
     def analysis_fluctuation_scaling(self, eps, N_values=(100, 1000, 10000, 100000)):
+        _apply_style()
+
         print("=" * 60)
         print(f"ANALYSIS 2: Fluctuation scaling  ({self.name}, eps={eps})")
         print("=" * 60)
@@ -335,44 +441,61 @@ class CoupledMapLattice:
         for N in N_values:
             trial_sigmas, trial_means = [], []
             for trial in range(n_trials):
-                h = self.simulate(N, eps, T_total=8000, T_transient=3000, seed=42 + trial)
+                h = self.simulate(N, eps, T_total=8000,
+                                  T_transient=3000, seed=42 + trial)
                 trial_sigmas.append(np.std(h))
                 trial_means.append(np.mean(h))
             sigmas.append(np.mean(trial_sigmas))
             means.append(np.mean(trial_means))
-            print(f"  N={N:>6d}:  <h> = {means[-1]:.6f},  sigma_h = {sigmas[-1]:.6f}")
+            print(f"  N={N:>6d}:  <h> = {means[-1]:.6f},"
+                  f"  sigma_h = {sigmas[-1]:.6f}")
 
         sigmas = np.array(sigmas)
         N_arr  = np.array(N_values, dtype=float)
 
-        slope, intercept, r, p, se = stats.linregress(np.log(N_arr), np.log(sigmas))
-        print(f"\n  Log-log fit:  sigma_h ~ N^{slope:.4f}  (R^2 = {r**2:.6f})")
+        slope, intercept, r, p, se = stats.linregress(
+            np.log(N_arr), np.log(sigmas))
+        print(f"\n  Log-log fit:  sigma_h ~ N^{slope:.4f}"
+              f"  (R^2 = {r**2:.6f})")
         print(f"  Expected: -0.5000,  Deviation: {abs(slope + 0.5):.4f}")
 
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        fig, axes = plt.subplots(1, 2, figsize=(FIG_WIDTH_2COL, 3.2))
 
+        # ── Left: log-log scaling ──────────────────────────────────────
         ax = axes[0]
-        ax.loglog(N_arr, sigmas, 'ko-', markersize=7, label='Measured sigma_h')
+        ax.loglog(N_arr, sigmas, marker=_marker(0), ms=5,
+                  color=_color(0), ls='none', zorder=3,
+                  label='Measured $\\sigma_h$')
         N_fit = np.linspace(N_arr[0], N_arr[-1], 100)
-        ax.loglog(N_fit, np.exp(intercept) * N_fit**slope, 'r--', lw=2,
-                  label=f'Fit: N^{{{slope:.3f}}}')
+        ax.loglog(N_fit, np.exp(intercept) * N_fit**slope,
+                  color=_color(1), ls='--', lw=1.2,
+                  label=rf'Fit: $N^{{{slope:.3f}}}$')
         ax.loglog(N_fit, sigmas[0] * (N_fit / N_arr[0])**(-0.5),
-                  'b:', lw=1.5, alpha=0.7, label='N^{-1/2} reference')
-        ax.set_xlabel('N', fontsize=12); ax.set_ylabel('sigma_h', fontsize=12)
-        ax.set_title(f'Fluctuation Scaling ({self.name}, eps={eps})', fontsize=13)
-        ax.legend(fontsize=11); ax.grid(True, alpha=0.3)
+                  color=_color(2), ls=':', lw=1.0, alpha=0.7,
+                  label=r'$N^{-1/2}$ reference')
+        ax.set_xlabel(r'$N$')
+        ax.set_ylabel(r'$\sigma_h$')
+        ax.set_title(rf'Fluctuation Scaling ({self.param_label}, '
+                     rf'$\varepsilon={eps}$)')
+        ax.legend()
+        _panel_label(ax, '(a)')
 
+        # ── Right: mean convergence ────────────────────────────────────
         ax = axes[1]
-        ax.semilogx(N_arr, means, 'ko-', markersize=7)
+        ax.semilogx(N_arr, means, marker=_marker(0), ms=5,
+                     color=_color(0), ls='-', lw=0.8)
         h_inf = means[-1]
-        ax.axhline(y=h_inf, color='r', linestyle='--', label=f'h_bar ~ {h_inf:.4f}')
-        ax.set_xlabel('N', fontsize=12); ax.set_ylabel('<h_t>', fontsize=12)
-        ax.set_title('Mean Field Convergence', fontsize=13)
-        ax.legend(fontsize=11); ax.grid(True, alpha=0.3)
+        ax.axhline(y=h_inf, color=_color(1), linestyle='--', lw=0.8,
+                   label=rf'$\bar h \approx {h_inf:.4f}$')
+        ax.set_xlabel(r'$N$')
+        ax.set_ylabel(r'$\langle h_t \rangle$')
+        ax.set_title('Mean Field Convergence')
+        ax.legend()
+        _panel_label(ax, '(b)')
 
         plt.tight_layout()
         fname = f'./{self.name}_eps{eps}_scaling.png'
-        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
@@ -383,16 +506,19 @@ class CoupledMapLattice:
     # ANALYSIS 3: Distribution of h_t and rescaled collapse
     # ══════════════════════════════════════════════════════════════════════
     def analysis_distribution(self, eps, N_values=(100, 1000, 10000, 100000)):
+        _apply_style()
+
         print("=" * 60)
-        print(f"ANALYSIS 3: Distribution & rescaled collapse  ({self.name}, eps={eps})")
+        print(f"ANALYSIS 3: Distribution & rescaled collapse"
+              f"  ({self.name}, eps={eps})")
         print("=" * 60)
 
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd']
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+        fig, axes = plt.subplots(1, 3, figsize=(FIG_WIDTH_2COL + 3.0, 3.5))
         all_rescaled = {}
 
         for i, N in enumerate(N_values):
-            h = self.simulate(N, eps, T_total=12000, T_transient=2000, seed=42)
+            h = self.simulate(N, eps, T_total=12000,
+                              T_transient=2000, seed=42)
             h = h[np.isfinite(h)]
             if len(h) == 0:
                 print(f"  N={N:>6d}: simulation diverged, skipping")
@@ -402,37 +528,57 @@ class CoupledMapLattice:
             all_rescaled[N] = rescaled
 
             _, shapiro_p = stats.shapiro(h[:5000])
-            print(f"  N={N:>6d}: <h>={h_mean:.6f}, sigma={h_std:.6f}, Shapiro p={shapiro_p:.4f}")
+            print(f"  N={N:>6d}: <h>={h_mean:.6f},"
+                  f" sigma={h_std:.6f}, Shapiro p={shapiro_p:.4f}")
 
-            axes[0].hist(h, bins=60, density=True, alpha=0.5, color=colors[i], label=f'N={N}')
-            axes[1].hist(rescaled, bins=60, density=True, alpha=0.5, color=colors[i], label=f'N={N}')
+            axes[0].hist(h, bins=60, density=True, alpha=0.45,
+                         color=_color(i), histtype='stepfilled',
+                         edgecolor=_color(i), linewidth=0.5,
+                         label=f'$N={N}$')
+            axes[1].hist(rescaled, bins=60, density=True, alpha=0.45,
+                         color=_color(i), histtype='stepfilled',
+                         edgecolor=_color(i), linewidth=0.5,
+                         label=f'$N={N}$')
 
-        last_key = next((N for N in reversed(N_values) if N in all_rescaled), None)
+        last_key = next(
+            (N for N in reversed(N_values) if N in all_rescaled), None)
         if last_key is None:
             print("  All simulations diverged. Skipping plots.")
-            plt.close(); return
+            plt.close()
+            return
         ref_std = np.std(all_rescaled[last_key])
         xg = np.linspace(-4 * ref_std, 4 * ref_std, 200)
-        axes[1].plot(xg, stats.norm.pdf(xg, 0, ref_std), 'k-', lw=2, label='Gaussian')
+        axes[1].plot(xg, stats.norm.pdf(xg, 0, ref_std),
+                     color='#000000', ls='-', lw=1.2, label='Gaussian')
 
-        axes[0].set_xlabel('h_t'); axes[0].set_ylabel('Density')
-        axes[0].set_title('Distribution of h_t'); axes[0].legend()
-        axes[0].grid(True, alpha=0.3)
+        axes[0].set_xlabel(r'$h_t$')
+        axes[0].set_ylabel('Density')
+        axes[0].set_title(r'Distribution of $h_t$')
+        axes[0].legend(fontsize=6.5)
+        _panel_label(axes[0], '(a)')
 
-        axes[1].set_xlabel('(h_t - h_bar)*sqrt(N)'); axes[1].set_ylabel('Density')
-        axes[1].set_title('Rescaled (should collapse)'); axes[1].legend()
-        axes[1].grid(True, alpha=0.3)
+        axes[1].set_xlabel(r'$\frac{(h_t- \bar h)}{\sqrt{N}}$')
+        axes[1].set_ylabel('Density')
+        axes[1].set_title('Rescaled (should collapse)')
+        axes[1].legend(fontsize=6.5)
+        _panel_label(axes[1], '(b)')
 
-        h_largest = self.simulate(last_key, eps, T_total=12000, T_transient=2000, seed=42)
+        h_largest = self.simulate(last_key, eps, T_total=12000,
+                                  T_transient=2000, seed=42)
         h_largest = h_largest[np.isfinite(h_largest)]
         if len(h_largest) > 0:
             z = (h_largest - np.mean(h_largest)) / np.std(h_largest)
             stats.probplot(z, dist="norm", plot=axes[2])
-        axes[2].set_title(f'Q-Q Plot (N={last_key})'); axes[2].grid(True, alpha=0.3)
+            # Restyle the Q-Q points and fit line produced by probplot
+            axes[2].get_lines()[0].set(color=_color(0), marker=_marker(0),
+                                       ms=2.5, ls='none', markeredgewidth=0)
+            axes[2].get_lines()[1].set(color=_color(1), ls='--', lw=1.0)
+        axes[2].set_title(rf'Q-Q Plot ($N={last_key}$)')
+        _panel_label(axes[2], '(c)')
 
         plt.tight_layout()
         fname = f'./{self.name}_eps{eps}_distribution.png'
-        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
@@ -449,12 +595,13 @@ class CoupledMapLattice:
             Range of candidate h_bar values. Set to cover the expected
             mean field of your map (e.g. (-0.5, 1.5) for Lozi).
         """
+        _apply_style()
+
         print("=" * 60)
         print(f"ANALYSIS 4: Self-consistency  ({self.name}, eps={eps})")
         print("=" * 60)
 
         def single_site_average(h_bar):
-            # Use N=1 with init_fn so dimensionality is handled correctly
             state = self.init_fn(1, np.random.default_rng(0))
             total = 0.0
             for t in range(T_sc):
@@ -465,7 +612,8 @@ class CoupledMapLattice:
             return total / (T_sc - T_trans_sc)
 
         h_candidates = np.linspace(h_range[0], h_range[1], 50)
-        f_averages   = np.array([single_site_average(h) for h in h_candidates])
+        f_averages   = np.array([single_site_average(h)
+                                 for h in h_candidates])
         residuals    = f_averages - h_candidates
 
         sign_changes = np.where(np.diff(np.sign(residuals)))[0]
@@ -475,7 +623,8 @@ class CoupledMapLattice:
             r1, r2 = residuals[idx], residuals[idx + 1]
             h_star_list.append(h1 - r1 * (h2 - h1) / (r2 - r1))
 
-        h_sim      = self.simulate(N_sc, eps, T_total=10000, T_transient=3000, seed=42)
+        h_sim      = self.simulate(N_sc, eps, T_total=10000,
+                                   T_transient=3000, seed=42)
         h_sim_mean = np.mean(h_sim)
 
         print(f"  Self-consistent h_bar: {h_star_list}")
@@ -483,21 +632,28 @@ class CoupledMapLattice:
         if h_star_list:
             print(f"  |diff| = {abs(h_star_list[0] - h_sim_mean):.6f}")
 
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.plot(h_candidates, f_averages, 'b-', lw=2, label='<f(state)> under rho*')
-        ax.plot(h_candidates, h_candidates, 'r--', lw=1.5, label='y = h_bar')
+        fig, ax = plt.subplots(figsize=(FIG_WIDTH_1COL * 1.8, 3.5))
+        ax.plot(h_candidates, f_averages, color=_color(0), ls=_ls(0),
+                lw=1.2, label=r'$\langle f \rangle$ under $\rho^*$')
+        ax.plot(h_candidates, h_candidates, color=_color(1), ls='--',
+                lw=0.9, label=r'$y = \bar h$')
         for hs in h_star_list:
-            ax.plot(hs, hs, 'go', ms=12, zorder=5, label=f'Fixed point: {hs:.4f}')
-        ax.axvline(h_sim_mean, color='purple', ls='--', alpha=0.5,
-                   label=f'Sim mean: {h_sim_mean:.4f}')
-        ax.set_xlabel('h_bar (candidate)'); ax.set_ylabel('<f>')
-        ax.set_title(f'Self-Consistency ({self.name}, eps={eps})')
-        ax.legend(); ax.grid(True, alpha=0.3)
+            ax.plot(hs, hs, marker=_marker(0), ms=7, zorder=5,
+                    color=_color(0), markerfacecolor='white',
+                    markeredgewidth=1.2,
+                    label=rf'Fixed point: ${hs:.4f}$')
+        ax.axvline(h_sim_mean, color=_color(2), ls='-.', lw=0.8,
+                   alpha=0.7,
+                   label=rf'Sim mean: ${h_sim_mean:.4f}$')
+        ax.set_xlabel(r'$\bar h$ (candidate)')
+        ax.set_ylabel(r'$\langle f \rangle$')
+        ax.set_title(rf'Self-Consistency ({self.param_label}, '
+                     rf'$\varepsilon={eps}$)')
+        ax.legend()
 
         plt.tight_layout()
-
         fname = f'./{self.name}_eps{eps}_self_consistency.png'
-        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
@@ -505,10 +661,13 @@ class CoupledMapLattice:
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 5: Phase diagram — alpha(eps)
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_phase_diagram(self, eps_values=None, N_values=(100, 1000, 10000, 100000),
+    def analysis_phase_diagram(self, eps_values=None,
+                               N_values=(100, 1000, 10000, 100000),
                                n_jobs=1):
+        _apply_style()
+
         if eps_values is None:
-            eps_values = np.arange(0.02, 0.52, 0.03)
+            eps_values = np.arange(0.01, 0.9, 0.03)
         comm, rank, size = self._mpi()
         if rank == 0:
             print("=" * 60)
@@ -518,56 +677,79 @@ class CoupledMapLattice:
         N_arr = np.array(N_values, dtype=float)
 
         def _compute_eps(i, eps):
-            sigmas = [np.std(self.simulate(N, eps, T_total=6000, T_transient=2000, seed=42))
+            sigmas = [np.std(self.simulate(
+                          N, eps, T_total=6000, T_transient=2000, seed=42))
                       for N in N_values]
-            slope, _, r, _, se = stats.linregress(np.log(N_arr),
-                                                   np.log(np.array(sigmas) + 1e-15))
+            slope, _, r, _, se = stats.linregress(
+                np.log(N_arr), np.log(np.array(sigmas) + 1e-15))
             return i, -slope, se
 
         if size > 1:   # MPI
             my_indices = list(range(rank, len(eps_values), size))
-            my_results = [_compute_eps(i, eps_values[i]) for i in my_indices]
+            my_results = [_compute_eps(i, eps_values[i])
+                          for i in my_indices]
             all_results = comm.gather(my_results, root=0)
             if rank != 0:
                 return
-            all_results = sorted([r for sub in all_results for r in sub], key=lambda x: x[0])
+            all_results = sorted(
+                [r for sub in all_results for r in sub],
+                key=lambda x: x[0])
         else:           # joblib
             all_results = Parallel(n_jobs=n_jobs)(
-                delayed(_compute_eps)(i, eps) for i, eps in enumerate(eps_values)
+                delayed(_compute_eps)(i, eps)
+                for i, eps in enumerate(eps_values)
             )
             all_results = sorted(all_results, key=lambda x: x[0])
 
         for _, alpha, se in all_results:
-            print(f"  eps={eps_values[all_results.index((_, alpha, se))%len(eps_values)]:.2f}:"
+            idx = all_results.index((_, alpha, se)) % len(eps_values)
+            print(f"  eps={eps_values[idx]:.2f}:"
                   f"  alpha = {alpha:.4f} +/- {se:.4f}")
 
         alphas       = np.array([r[1] for r in all_results])
         alpha_errors = np.array([r[2] for r in all_results])
 
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        fig, axes = plt.subplots(1, 2, figsize=(FIG_WIDTH_2COL, 3.2))
 
+        # ── Left: alpha(eps) ───────────────────────────────────────────
         ax = axes[0]
-        ax.errorbar(eps_values, alphas, yerr=alpha_errors, fmt='ko-', ms=6, capsize=3)
-        ax.axhline(0.5, color='r', ls='--', lw=1.5, label='CLT (alpha=1/2)')
-        ax.fill_between(eps_values, 0.45, 0.55, alpha=0.1, color='red')
-        ax.set_xlabel('eps'); ax.set_ylabel('alpha')
-        ax.set_title(f'Scaling Exponent ({self.name})'); ax.legend()
-        ax.grid(True, alpha=0.3); ax.set_ylim(-0.1, 1.1)
+        ax.errorbar(eps_values, alphas, yerr=alpha_errors,
+                     fmt=_marker(0), ms=4, color=_color(0),
+                     ecolor=_color(2), capsize=2, elinewidth=0.6,
+                     lw=0.8, ls='-')
+        ax.axhline(0.5, color=_color(1), ls='--', lw=0.9,
+                   label=r'CLT ($\alpha=1/2$)')
+        ax.fill_between(eps_values, 0.45, 0.55, alpha=0.08,
+                        color=_color(2))
+        ax.set_xlabel(r'$\varepsilon$')
+        ax.set_ylabel(r'$\alpha$')
+        ax.set_title(f'Scaling Exponent ({self.param_label})')
+        ax.legend()
+        ax.set_ylim(-0.1, 1.1)
+        _panel_label(ax, '(a)')
 
+        # ── Right: scaling at selected couplings ───────────────────────
         ax = axes[1]
-        for eps_s, col in zip([0.05, 0.15, 0.3, 0.45],
-                               ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']):
-            sigs = [np.std(self.simulate(N, eps_s, T_total=6000, T_transient=2000, seed=42))
+        eps_samples = [0.05, 0.3, 0.45, 0.5, 0.75]
+        for j, eps_s in enumerate(eps_samples):
+            sigs = [np.std(self.simulate(
+                        N, eps_s, T_total=6000, T_transient=2000, seed=42))
                     for N in N_values]
-            ax.loglog(N_arr, sigs, 'o-', color=col, ms=6, label=f'eps={eps_s}')
-        ax.loglog(N_arr, 0.3 * N_arr**(-0.5), 'k--', lw=1, alpha=0.5, label='N^{-1/2}')
-        ax.set_xlabel('N'); ax.set_ylabel('sigma_h')
-        ax.set_title('Scaling at Different Couplings'); ax.legend()
-        ax.grid(True, alpha=0.3)
+            ax.loglog(N_arr, sigs, marker=_marker(j), ms=4,
+                      color=_color(j), ls=_ls(j), lw=0.8,
+                      label=rf'$\varepsilon={eps_s}$')
+        ax.loglog(N_arr, 0.3 * N_arr**(-0.5),
+                  color=_color(0), ls=':', lw=0.7, alpha=0.5,
+                  label=r'$N^{-1/2}$')
+        ax.set_xlabel(r'$N$')
+        ax.set_ylabel(r'$\sigma_h$')
+        ax.set_title('Scaling at Different Couplings')
+        ax.legend(fontsize=6.5)
+        _panel_label(ax, '(b)')
 
         plt.tight_layout()
         fname = f'./{self.name}_phase_diagram.png'
-        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
@@ -579,7 +761,7 @@ class CoupledMapLattice:
                             eps_range=(0.0, 1.0), eps_fixed=0.1,
                             map_factory=None, param_range=(0.5, 2.0),
                             h_bar=0.65, n_param=500,
-                            T_iter=800, T_trans=600):
+                            T_iter=800, T_trans=600, sweep_label=None):
         """
         Bifurcation diagram of the single-site map driven by a fixed h_bar.
 
@@ -588,25 +770,37 @@ class CoupledMapLattice:
         bifurcation_param : 'map_param'
             Sweep a map parameter. Requires map_factory(p) -> CoupledMapLattice
             (or a plain 1D callable for backwards compat).
+        sweep_label : str, optional
+            Name of the swept parameter for axis/title labels (e.g. 'a').
+            Only used when bifurcation_param='map_param'.
         """
+        _apply_style()
+
         if bifurcation_param == 'eps':
             param_values = np.linspace(eps_range[0], eps_range[1], n_param)
-            xlabel = 'eps'
+            xlabel = r'$\varepsilon$'
         elif bifurcation_param == 'map_param':
             if map_factory is None:
-                raise ValueError("map_factory required when bifurcation_param='map_param'")
+                raise ValueError(
+                    "map_factory required when bifurcation_param='map_param'")
             param_values = np.linspace(param_range[0], param_range[1], n_param)
-            xlabel = 'map param'
+            _sl = sweep_label if sweep_label is not None else 'map param'
+            xlabel = rf'${_sl}$'
         else:
-            raise ValueError("bifurcation_param must be 'eps' or 'map_param'")
+            raise ValueError(
+                "bifurcation_param must be 'eps' or 'map_param'")
 
         all_param, all_x = [], []
 
         for p in param_values:
             if bifurcation_param == 'eps':
-                f_obs, f_step, f_init, eps = self.obs_fn, self.step_fn, self.init_fn, p
+                f_obs  = self.obs_fn
+                f_step = self.step_fn
+                f_init = self.init_fn
+                eps    = p
             else:
-                f_obs, f_step, f_init = self._resolve_factory(p, map_factory)
+                f_obs, f_step, f_init = self._resolve_factory(
+                    p, map_factory)
                 eps = eps_fixed
 
             state   = f_init(1, np.random.default_rng(0))
@@ -632,21 +826,24 @@ class CoupledMapLattice:
                 all_param.append(p)
                 all_x.append(float(x[0]))
 
-        fig, ax = plt.subplots(figsize=(14, 8))
-        ax.scatter(all_param, all_x, s=0.01, c='black', alpha=0.3)
-        ax.set_xlabel(xlabel, fontsize=12)
-        ax.set_ylabel('x (attractor)', fontsize=12)
+        fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4.5))
+        ax.scatter(all_param, all_x, s=0.02, c='#000000', alpha=0.3,
+                   rasterized=True)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(r'$x$ (attractor)')
         if bifurcation_param == 'eps':
-            title = f'(1-eps)*f(state) + eps*h_bar  ({self.name}, h_bar={h_bar})'
+            title = (rf'$(1-\varepsilon)\,f(x) + \varepsilon\,\bar h$'
+                     rf'  ({self.param_label}, $\bar h={h_bar}$)')
         else:
-            title = f'(1-eps)*f(state) + eps*h_bar  ({self.name}, eps={eps_fixed}, h_bar={h_bar})'
-        ax.set_title(title, fontsize=13)
-        ax.set_ylim(-1,2)
-        ax.grid(True, alpha=0.3)
-        fname = f'./{self.name}_bifurcation_{bifurcation_param}.png'
-        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
-        plt.show()
+            title = (rf'$(1-\varepsilon)\,f(x) + \varepsilon\,\bar h$'
+                     rf'  ($\varepsilon={eps_fixed}$, $\bar h={h_bar}$)')
+        ax.set_title(title)
+        ax.set_ylim(-1, 2)
+
         plt.tight_layout()
+        fname = f'./{self.name}_bifurcation_{bifurcation_param}.png'
+        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
+        plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
 
@@ -655,53 +852,73 @@ class CoupledMapLattice:
     # ══════════════════════════════════════════════════════════════════════
     def analysis_meanfield_bifurcation(self, sweep='eps',
                                        eps_range=(0.0, 1.0), eps_fixed=0.4,
-                                       map_factory=None, param_range=(0.5, 3.0),
+                                       map_factory=None,
+                                       param_range=(0.5, 3.0),
                                        N=10000, n_param=500,
+                                       sweep_label=None,
                                        T_total=6000, T_transient=4000,
                                        seed=42, n_jobs=1):
         """
-        Bifurcation diagram of the mean field h_t from the full N-body simulation.
+        Bifurcation diagram of the mean field h_t from the full
+        N-body simulation.
 
         sweep : 'eps'
             Sweep coupling strength (uses self's map functions).
         sweep : 'map_param'
-            Sweep a map parameter. Requires map_factory(p) -> CoupledMapLattice
-            (or a plain 1D callable).
+            Sweep a map parameter. Requires
+            map_factory(p) -> CoupledMapLattice (or a plain 1D callable).
         """
+        _apply_style()
+
         comm, rank, size = self._mpi()
         if sweep == 'eps':
-            param_values = np.linspace(eps_range[0], eps_range[1], n_param)
-            xlabel, fixed_label = 'eps', self.name
+            param_values     = np.linspace(eps_range[0], eps_range[1], n_param)
+            xlabel           = r'$\varepsilon$'
+            title_fixed      = self.param_label
+            fixed_label_file = self.name
         elif sweep == 'map_param':
             if map_factory is None:
-                raise ValueError("map_factory required when sweep='map_param'")
-            param_values = np.linspace(param_range[0], param_range[1], n_param)
-            xlabel, fixed_label = 'map param', f'eps={eps_fixed}'
+                raise ValueError(
+                    "map_factory required when sweep='map_param'")
+            param_values     = np.linspace(param_range[0], param_range[1],
+                                           n_param)
+            _sl              = sweep_label if sweep_label is not None else 'map param'
+            xlabel           = rf'${_sl}$'
+            title_fixed      = rf'$\varepsilon={eps_fixed}$'
+            fixed_label_file = f'eps{eps_fixed}'
         else:
             raise ValueError("sweep must be 'eps' or 'map_param'")
 
         if rank == 0:
             print("=" * 60)
-            print(f"ANALYSIS 6: Mean-field bifurcation  ({self.name}, sweep={sweep}, N={N})")
+            print(f"ANALYSIS 6: Mean-field bifurcation"
+                  f"  ({self.name}, sweep={sweep}, N={N})")
             print("=" * 60)
 
         n_keep = 300
 
         def _compute_param(p):
             if sweep == 'eps':
-                f_obs, f_step, f_init, eps = self.obs_fn, self.step_fn, self.init_fn, p
+                f_obs  = self.obs_fn
+                f_step = self.step_fn
+                f_init = self.init_fn
+                eps    = p
             else:
-                f_obs, f_step, f_init = self._resolve_factory(p, map_factory)
+                f_obs, f_step, f_init = self._resolve_factory(
+                    p, map_factory)
                 eps = eps_fixed
-            h = self.simulate(N, eps, T_total=T_total, T_transient=T_transient,
-                              seed=seed, obs_fn=f_obs, step_fn=f_step, init_fn=f_init)
+            h = self.simulate(N, eps, T_total=T_total,
+                              T_transient=T_transient, seed=seed,
+                              obs_fn=f_obs, step_fn=f_step,
+                              init_fn=f_init)
             h_tail = h[-n_keep:]
             mask   = np.isfinite(h_tail) & (np.abs(h_tail) < 20)
             return [(p, hv) for hv in h_tail[mask]]
 
         if size > 1:   # MPI
             my_indices = list(range(rank, len(param_values), size))
-            my_pairs = [pair for i in my_indices for pair in _compute_param(param_values[i])]
+            my_pairs = [pair for i in my_indices
+                        for pair in _compute_param(param_values[i])]
             all_gathered = comm.gather(my_pairs, root=0)
             if rank != 0:
                 return
@@ -716,22 +933,22 @@ class CoupledMapLattice:
         all_h     = np.array([h for _, h in all_pairs])
         print(f"  Total points: {len(all_h)}")
 
-        fig, ax = plt.subplots(figsize=(14, 7))
-        ax.scatter(all_param, all_h, s=0.05, c='black', alpha=0.4, rasterized=True)
-        ax.set_xlabel(xlabel, fontsize=13)
-        ax.set_ylabel('$h_t$ (mean field)', fontsize=13)
-        ax.set_title(f'Mean-Field Bifurcation ({self.name}, sweep={sweep})', fontsize=14)
-        ax.grid(True, alpha=0.3)
+        fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4.0))
+        ax.scatter(all_param, all_h, s=0.05, c='#000000', alpha=0.4,
+                   rasterized=True)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(r'$h_t$ (mean field)')
+        ax.set_title(f'Mean-Field Bifurcation ({title_fixed})')
 
         if len(all_h) > 0:
             y_lo, y_hi = np.percentile(all_h, [0.1, 99.9])
-            margin = 0.05 * max(y_hi - y_lo, 0.01)
+            margin = 0.2 * max(y_hi - y_lo, 0.01)
             ax.set_ylim(y_lo - margin, y_hi + margin)
 
         plt.tight_layout()
         fname = (f'./{self.name}_meanfield_bif_{sweep}_'
-                 f'{fixed_label.replace("=", "")}_N{N}.png')
-        plt.savefig(self._savepath(fname), dpi=200, bbox_inches='tight')
+                 f'{fixed_label_file}_N{N}.png')
+        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
@@ -743,7 +960,8 @@ class CoupledMapLattice:
                    x_bound=100, n_trials=3, seed=42,
                    obs_fn=None, step_fn=None, init_fn=None):
         kw = dict(T_total=T_total, x_bound=x_bound, n_trials=n_trials,
-                  seed=seed, obs_fn=obs_fn, step_fn=step_fn, init_fn=init_fn)
+                  seed=seed, obs_fn=obs_fn, step_fn=step_fn,
+                  init_fn=init_fn)
         if not self._system_escapes(N_min, eps, **kw):
             return N_min
         if self._system_escapes(N_max, eps, **kw):
@@ -759,82 +977,108 @@ class CoupledMapLattice:
 
     def analysis_min_N_escape(self, sweep='eps',
                               eps_range=(0.0, 0.5), eps_fixed=0.1,
-                              map_factory=None, param_range=(1.0, 3.0),
+                              map_factory=None,
+                              param_range=(1.0, 3.0),
                               n_param=60, N_min=2, N_max=100000,
-                              T_total=4000, x_bound=100, n_trials=3, seed=42,
-                              n_jobs=1):
+                              T_total=4000, x_bound=100, n_trials=3,
+                              seed=42, n_jobs=1, sweep_label=None):
         """
         sweep : 'eps' or 'map_param' (requires map_factory).
+        sweep_label : str, optional
+            Name of the swept parameter for axis/title labels (e.g. 'a').
+            Only used when sweep='map_param'.
         """
+        _apply_style()
+
         comm, rank, size = self._mpi()
         if sweep == 'eps':
             param_values = np.linspace(eps_range[0], eps_range[1], n_param)
-            fixed_label, xlabel = self.name, 'eps'
+            title_fixed  = self.param_label
+            xlabel       = r'$\varepsilon$'
         elif sweep == 'map_param':
             if map_factory is None:
-                raise ValueError("map_factory required when sweep='map_param'")
-            param_values = np.linspace(param_range[0], param_range[1], n_param)
-            fixed_label, xlabel = f'eps={eps_fixed}', 'map param'
+                raise ValueError(
+                    "map_factory required when sweep='map_param'")
+            param_values = np.linspace(param_range[0], param_range[1],
+                                       n_param)
+            _sl         = sweep_label if sweep_label is not None else 'map param'
+            xlabel      = rf'${_sl}$'
+            title_fixed = rf'$\varepsilon={eps_fixed}$'
         else:
             raise ValueError("sweep must be 'eps' or 'map_param'")
 
         if rank == 0:
             print("=" * 60)
-            print(f"ANALYSIS 7: Minimum N to prevent escape  ({self.name}, sweep={sweep})")
+            print(f"ANALYSIS 7: Minimum N to prevent escape"
+                  f"  ({self.name}, sweep={sweep})")
             print("=" * 60)
 
         def _compute_param(i, p):
             if sweep == 'eps':
-                f_obs, f_step, f_init, eps = self.obs_fn, self.step_fn, self.init_fn, p
+                f_obs  = self.obs_fn
+                f_step = self.step_fn
+                f_init = self.init_fn
+                eps    = p
             else:
-                f_obs, f_step, f_init = self._resolve_factory(p, map_factory)
+                f_obs, f_step, f_init = self._resolve_factory(
+                    p, map_factory)
                 eps = eps_fixed
-            Nc = self.find_min_N(eps, N_min=N_min, N_max=N_max, T_total=T_total,
-                                  x_bound=x_bound, n_trials=n_trials, seed=seed,
-                                  obs_fn=f_obs, step_fn=f_step, init_fn=f_init)
+            Nc = self.find_min_N(eps, N_min=N_min, N_max=N_max,
+                                  T_total=T_total, x_bound=x_bound,
+                                  n_trials=n_trials, seed=seed,
+                                  obs_fn=f_obs, step_fn=f_step,
+                                  init_fn=f_init)
             Nc_str = f"{Nc}" if Nc is not None else f"> {N_max}"
             print(f"  {xlabel}={p:.4f}:  N_min = {Nc_str}")
             return i, p, Nc
 
         if size > 1:   # MPI
             my_indices = list(range(rank, len(param_values), size))
-            my_results = [_compute_param(i, param_values[i]) for i in my_indices]
+            my_results = [_compute_param(i, param_values[i])
+                          for i in my_indices]
             all_results = comm.gather(my_results, root=0)
             if rank != 0:
                 return None, None
-            all_results = sorted([r for sub in all_results for r in sub], key=lambda x: x[0])
+            all_results = sorted(
+                [r for sub in all_results for r in sub],
+                key=lambda x: x[0])
         else:           # joblib
             all_results = Parallel(n_jobs=n_jobs)(
-                delayed(_compute_param)(i, p) for i, p in enumerate(param_values)
+                delayed(_compute_param)(i, p)
+                for i, p in enumerate(param_values)
             )
             all_results = sorted(all_results, key=lambda x: x[0])
 
         results_param = [r[1] for r in all_results]
         results_N     = [r[2] for r in all_results]
 
-        p_finite = [p for p, n in zip(results_param, results_N) if n is not None]
+        p_finite = [p for p, n in zip(results_param, results_N)
+                    if n is not None]
         N_finite = [n for n in results_N if n is not None]
-        p_inf    = [p for p, n in zip(results_param, results_N) if n is None]
+        p_inf    = [p for p, n in zip(results_param, results_N)
+                    if n is None]
 
-        fig, ax = plt.subplots(figsize=(12, 6))
+        fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL * 0.75, 3.5))
         if p_finite:
-            ax.semilogy(p_finite, N_finite, 'ko-', ms=5, lw=1.5,
-                        label='$N_{\\mathrm{min}}$ (bounded)')
+            ax.semilogy(p_finite, N_finite, marker=_marker(0), ms=4,
+                        color=_color(0), ls='-', lw=0.9,
+                        label=r'$N_{\mathrm{min}}$ (bounded)')
         if p_inf:
-            ax.axvspan(min(p_inf) - 0.01, max(p_inf) + 0.01, color='red', alpha=0.12,
-                       label=f'Escapes for all N <= {N_max}')
+            ax.axvspan(min(p_inf) - 0.01, max(p_inf) + 0.01,
+                       color=_color(2), alpha=0.10,
+                       label=rf'Escapes for all $N \leq {N_max}$')
             for pi in p_inf:
-                ax.semilogy(pi, N_max, 'rx', ms=9, mew=2)
+                ax.semilogy(pi, N_max, marker='x', ms=6, mew=1.2,
+                            color=_color(1))
 
-        ax.set_xlabel(xlabel, fontsize=13)
-        ax.set_ylabel('$N_{\\mathrm{min}}$', fontsize=13)
-        ax.set_title(f'Minimum N to Prevent Escape  ({self.name}, {fixed_label})', fontsize=14)
-        ax.legend(fontsize=11)
-        ax.grid(True, alpha=0.3, which='both')
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(r'$N_{\mathrm{min}}$')
+        ax.set_title(f'Minimum $N$ to Prevent Escape  ({title_fixed})')
+        ax.legend()
 
         plt.tight_layout()
         fname = f'./{self.name}_min_N_escape_{sweep}.png'
-        plt.savefig(self._savepath(fname), dpi=150, bbox_inches='tight')
+        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
         print(f"  -> Saved {fname}\n")
