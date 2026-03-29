@@ -243,7 +243,7 @@ class CoupledMapLattice:
             return (1.0 - eps) * fxy + eps * h,  b * x
 
         def init(N, rng):
-            x = rng.uniform(-1, 1, N)
+            x = rng.uniform(-0.5, 0.5, N)
             return x, b * x + rng.uniform(-0.01, 0.01, N)
 
         return cls(obs_fn=obs, step_fn=step, init_fn=init,
@@ -289,16 +289,18 @@ class CoupledMapLattice:
     # ── Trajectory plot ────────────────────────────────────────────────────
     def plot_trajectories(self, N, eps, n_show=5,
                           T_total=3000, T_transient=2000,
-                          seed=None, save=True):
+                          seed=None, save=True, x_lim=None, y_lim=None, fname=None,
+                          component=0):
         """
         Evolve the system and plot the last (T_total - T_transient) steps.
 
         Parameters
         ----------
-        N       : total number of particles in the simulation
-        eps     : coupling strength
-        n_show  : how many individual particle trajectories to overlay
-        save    : whether to save the figure to output_dir
+        N         : total number of particles in the simulation
+        eps       : coupling strength
+        n_show    : how many individual particle trajectories to overlay
+        save      : whether to save the figure to output_dir
+        component : which state component to plot (0 = x, 1 = y for 2D maps like Lozi)
         """
         _apply_style()
 
@@ -326,11 +328,15 @@ class CoupledMapLattice:
             if t >= T_transient:
                 i = t - T_transient
                 h_series[i] = h
-                # extract x-component (works for 1D array or tuple)
-                x = state[0] if isinstance(state, tuple) else state
+                # extract the requested component (works for 1D array or tuple)
+                if isinstance(state, tuple):
+                    x = state[component]
+                else:
+                    x = state
                 x_tracks[i] = x[indices]
 
         time = np.arange(T_rec)
+        comp_label = (r'$x$', r'$y$', r'$z$')[component] if component < 3 else rf'$s_{{{component}}}$'
 
         fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4))
         for j in range(n_show):
@@ -340,22 +346,26 @@ class CoupledMapLattice:
         ax.plot(time, h_series, color='#000000', lw=1.2,
                 label=r'$h_t$ (mean field)')
 
-        ax.set_xlabel(r'Time step')
-        ax.set_ylabel(r'$x$')
+        ax.set_xlabel(r'Time step $t$')
+        ax.set_ylabel(comp_label)
         ax.set_title(rf'Trajectories  ({self.param_label},  $N={N}$,  '
                      rf'$\varepsilon={eps}$)')
         ax.legend(fontsize=7, ncol=2)
+        ax.set_xlim(x_lim)
+        ax.set_ylim(y_lim)
         plt.tight_layout()
 
         if save:
-            fname = f'{self.name}_eps{eps}_N{N}_trajectories.png'
+            if fname is None:
+                comp_suffix = f'_c{component}' if component != 0 else ''
+                fname = f'{self.name}_eps{eps}_N{N}_trajectories{comp_suffix}.png'
             plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-            print(f'  -> Saved {fname}')
+            print(f'  -> Saved {self._savepath(fname)}')
 
         plt.show()
         plt.close()
 
-    def _system_escapes(self, N, eps, T_total=4000, x_bound=100,
+    def _system_escapes(self, N, eps, T_total=4000, x_bound=20,
                         n_trials=3, seed=42,
                         obs_fn=None, step_fn=None, init_fn=None):
         f    = obs_fn  or self.obs_fn
@@ -519,7 +529,7 @@ class CoupledMapLattice:
         for i, N in enumerate(N_values):
             h = self.simulate(N, eps, T_total=12000,
                               T_transient=2000, seed=42)
-            h = h[np.isfinite(h)]
+            h = h[np.isfinite(h)] 
             if len(h) == 0:
                 print(f"  N={N:>6d}: simulation diverged, skipping")
                 continue
@@ -761,7 +771,8 @@ class CoupledMapLattice:
                             eps_range=(0.0, 1.0), eps_fixed=0.1,
                             map_factory=None, param_range=(0.5, 2.0),
                             h_bar=0.65, n_param=500,
-                            T_iter=800, T_trans=600, sweep_label=None):
+                            T_iter=5000, T_trans=4500, sweep_label=None, x_lim=None, y_lim=(-1.5,1.5),
+                            component=0):
         """
         Bifurcation diagram of the single-site map driven by a fixed h_bar.
 
@@ -809,7 +820,7 @@ class CoupledMapLattice:
             for _ in range(T_trans):
                 f_val = f_obs(state)
                 state = f_step(state, f_val, eps, h_bar)
-                x = state[0] if isinstance(state, tuple) else state
+                x = state[component] if isinstance(state, tuple) else state
                 if not np.isfinite(x[0]) or abs(x[0]) > 100:
                     escaped = True
                     break
@@ -820,7 +831,7 @@ class CoupledMapLattice:
             for _ in range(T_iter - T_trans):
                 f_val = f_obs(state)
                 state = f_step(state, f_val, eps, h_bar)
-                x = state[0] if isinstance(state, tuple) else state
+                x = state[component] if isinstance(state, tuple) else state
                 if not np.isfinite(x[0]) or abs(x[0]) > 100:
                     break
                 all_param.append(p)
@@ -829,8 +840,9 @@ class CoupledMapLattice:
         fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4.5))
         ax.scatter(all_param, all_x, s=0.02, c='#000000', alpha=0.3,
                    rasterized=True)
+        comp_label = (r'$x$', r'$y$', r'$z$')[component] if component < 3 else rf'$s_{{{component}}}$'
         ax.set_xlabel(xlabel)
-        ax.set_ylabel(r'$x$ (attractor)')
+        ax.set_ylabel(comp_label)
         if bifurcation_param == 'eps':
             title = (rf'$(1-\varepsilon)\,f(x) + \varepsilon\,\bar h$'
                      rf'  ({self.param_label}, $\bar h={h_bar}$)')
@@ -838,10 +850,12 @@ class CoupledMapLattice:
             title = (rf'$(1-\varepsilon)\,f(x) + \varepsilon\,\bar h$'
                      rf'  ($\varepsilon={eps_fixed}$, $\bar h={h_bar}$)')
         ax.set_title(title)
-        ax.set_ylim(-1, 2)
+        ax.set_xlim(x_lim)
+        ax.set_ylim(y_lim)
 
         plt.tight_layout()
-        fname = f'./{self.name}_bifurcation_{bifurcation_param}.png'
+        comp_suffix = f'_c{component}' if component != 0 else ''
+        fname = f'./{self.name}_bifurcation_{bifurcation_param}{comp_suffix}.png'
         plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
         plt.show()
         plt.close()
@@ -979,8 +993,8 @@ class CoupledMapLattice:
                               eps_range=(0.0, 0.5), eps_fixed=0.1,
                               map_factory=None,
                               param_range=(1.0, 3.0),
-                              n_param=60, N_min=2, N_max=100000,
-                              T_total=4000, x_bound=100, n_trials=3,
+                              n_param=60, N_min=1, N_max=100000,
+                              T_total=5000, x_bound=20, n_trials=3,
                               seed=42, n_jobs=1, sweep_label=None):
         """
         sweep : 'eps' or 'map_param' (requires map_factory).
