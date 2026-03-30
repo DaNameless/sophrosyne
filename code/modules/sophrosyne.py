@@ -238,11 +238,12 @@ class RosslerGloballyCoupled(DynamicalSystem):
         dx_mean = np.mean(dx_loc)
         dy_mean = np.mean(dy_loc)
         dz_mean = np.mean(dz_loc)
+        z_mean = np.mean(z)
         # Globally coupled
         eps = self.epsilon
-        dx = (1 - eps) * dx_loc + eps * dx_mean
-        dy = (1 - eps) * dy_loc + eps * dy_mean
-        dz = (1 - eps) * dz_loc + eps * dz_mean
+        dx = dx_loc#(1 - eps) * dx_loc + eps * dx_mean
+        dy = dy_loc #(1 - eps) * dy_loc + eps * dy_mean
+        dz = (1 - eps) * dz_loc + eps * z_mean
         return np.stack([dx, dy, dz], axis=1)
 
     @property
@@ -352,7 +353,7 @@ class ShimizuMorioka2(DynamicalSystem):
 
     @property
     def name(self):
-        return "ShimizuMorioka"
+        return "ShimizuMorioka2"
 
     @property
     def labels(self):
@@ -554,7 +555,7 @@ class SimulationRunner:
         steps: int = 200_000,
         threshold: float = 100.0,
         window: int = 5000,
-        ic_spread: float = 0.6,
+        ic_spread: float = 0.1,
         ic_dist: str = "uniform",
         save_full: bool = False,
         seed: Optional[int] = None,

@@ -771,7 +771,7 @@ class CoupledMapLattice:
                             eps_range=(0.0, 1.0), eps_fixed=0.1,
                             map_factory=None, param_range=(0.5, 2.0),
                             h_bar=0.65, n_param=500,
-                            T_iter=5000, T_trans=4500, sweep_label=None, x_lim=None, y_lim=(-1.5,1.5),
+                            T_iter=10000, T_trans=9500, sweep_label=None, x_lim=None, y_lim=(-1.5,1.5),
                             component=0):
         """
         Bifurcation diagram of the single-site map driven by a fixed h_bar.
@@ -870,7 +870,7 @@ class CoupledMapLattice:
                                        param_range=(0.5, 3.0),
                                        N=10000, n_param=500,
                                        sweep_label=None,
-                                       T_total=6000, T_transient=4000,
+                                       T_total=10000, T_transient=9500,
                                        seed=42, n_jobs=1):
         """
         Bifurcation diagram of the mean field h_t from the full
@@ -994,7 +994,7 @@ class CoupledMapLattice:
                               map_factory=None,
                               param_range=(1.0, 3.0),
                               n_param=60, N_min=1, N_max=100000,
-                              T_total=5000, x_bound=20, n_trials=3,
+                              T_total=10000, x_bound=20, n_trials=3,
                               seed=42, n_jobs=1, sweep_label=None):
         """
         sweep : 'eps' or 'map_param' (requires map_factory).
