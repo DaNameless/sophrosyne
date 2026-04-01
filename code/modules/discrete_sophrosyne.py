@@ -365,6 +365,13 @@ class CoupledMapLattice:
         plt.show()
         plt.close()
 
+        return {
+            'time':     np.arange(T_rec),
+            'h_series': h_series,
+            'x_tracks': x_tracks,
+            'indices':  indices,
+        }
+
     def _system_escapes(self, N, eps, T_total=4000, x_bound=20,
                         n_trials=3, seed=42,
                         obs_fn=None, step_fn=None, init_fn=None):
@@ -400,47 +407,60 @@ class CoupledMapLattice:
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 1: Time series visualization
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_timeseries(self, eps, N_values=(100, 1000, 10000, 100000)):
-        _apply_style()
-
+    def analysis_timeseries(self, eps, N_values=(100, 1000, 10000, 100000), T_show=200, T_transient=1000000, plot=True):
+        """
+        Returns
+        -------
+        dict : {N: h_array} for each N in N_values.
+        """
         print("=" * 60)
         print(f"ANALYSIS 1: Time series of h_t  ({self.name}, eps={eps})")
         print("=" * 60)
 
-        fig, axes = plt.subplots(len(N_values), 1,
-                                 figsize=(FIG_WIDTH_2COL, 2.2 * len(N_values)),
-                                 sharex=True)
-        T_show = 200
+        h_data = {}
+        for N in N_values:
+            h = self.simulate(N, eps, T_total=T_show + T_transient,
+                              T_transient=T_transient, seed=42)
+            h_data[N] = h[:T_show]
+            print(f"  N={N:>6d}:  sigma = {np.std(h_data[N]):.5f}")
 
-        for idx, (ax, N) in enumerate(zip(axes, N_values)):
-            h = self.simulate(N, eps, T_total=T_show + 10000,
-                              T_transient=10000, seed=42)
-            h = h[:T_show]
-            ax.plot(h, color=_color(0), ls=_ls(0), linewidth=0.5, alpha=0.8)
-            ax.axhline(y=np.mean(h), color=_color(1), linestyle='--',
-                       linewidth=0.7, alpha=0.6)
-            ax.set_ylabel(r'$h_t$')
-            ax.set_title(rf'$N = {N}$   '
-                         rf'($\sigma = {np.std(h):.5f}$)')
-            _panel_label(ax, f'({chr(97 + idx)})')
+        if plot:
+            _apply_style()
+            fig, axes = plt.subplots(len(N_values), 1,
+                                     figsize=(FIG_WIDTH_2COL, 2.2 * len(N_values)),
+                                     sharex=True)
+            for idx, (ax, N) in enumerate(zip(axes, N_values)):
+                h = h_data[N]
+                ax.plot(h, color=_color(0), ls=_ls(0), linewidth=0.5, alpha=0.8)
+                ax.axhline(y=np.mean(h), color=_color(1), linestyle='--',
+                           linewidth=0.7, alpha=0.6)
+                ax.set_ylabel(r'$h_t$')
+                ax.set_title(rf'$N = {N}$   '
+                             rf'($\sigma = {np.std(h):.5f}$)')
+                _panel_label(ax, f'({chr(97 + idx)})')
 
-        axes[-1].set_xlabel('Time step')
-        plt.suptitle(rf'Mean Field Time Series ({self.param_label}, '
-                     rf'$\varepsilon={eps}$)',
-                     fontsize=11, y=1.01)
-        plt.tight_layout()
-        fname = f'./{self.name}_eps{eps}_timeseries.png'
-        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-        plt.show()
-        plt.close()
-        print(f"  -> Saved {fname}\n")
+            axes[-1].set_xlabel('Time step')
+            plt.suptitle(rf'Mean Field Time Series ({self.param_label}, '
+                         rf'$\varepsilon={eps}$)',
+                         fontsize=11, y=1.01)
+            plt.tight_layout()
+            fname = f'./{self.name}_eps{eps}_timeseries.png'
+            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
+            plt.show()
+            plt.close()
+            print(f"  -> Saved {fname}\n")
+
+        return h_data
 
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 2: Fluctuation scaling  sigma_h  vs  N
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_fluctuation_scaling(self, eps, N_values=(100, 1000, 10000, 100000)):
-        _apply_style()
-
+    def analysis_fluctuation_scaling(self, eps, N_values=(100, 1000, 10000, 100000), T_show=2000, T_transient=1000000, plot=True):
+        """
+        Returns
+        -------
+        dict with keys: N_values, sigmas, means, slope, intercept, r2.
+        """
         print("=" * 60)
         print(f"ANALYSIS 2: Fluctuation scaling  ({self.name}, eps={eps})")
         print("=" * 60)
@@ -451,8 +471,8 @@ class CoupledMapLattice:
         for N in N_values:
             trial_sigmas, trial_means = [], []
             for trial in range(n_trials):
-                h = self.simulate(N, eps, T_total=8000,
-                                  T_transient=3000, seed=42 + trial)
+                h = self.simulate(N, eps, T_total=T_transient+T_show,
+                                  T_transient=T_transient, seed=42 + trial)
                 trial_sigmas.append(np.std(h))
                 trial_means.append(np.mean(h))
             sigmas.append(np.mean(trial_sigmas))
@@ -469,143 +489,177 @@ class CoupledMapLattice:
               f"  (R^2 = {r**2:.6f})")
         print(f"  Expected: -0.5000,  Deviation: {abs(slope + 0.5):.4f}")
 
-        fig, axes = plt.subplots(1, 2, figsize=(FIG_WIDTH_2COL, 3.2))
+        if plot:
+            _apply_style()
+            fig, axes = plt.subplots(1, 2, figsize=(FIG_WIDTH_2COL, 3.2))
 
-        # ── Left: log-log scaling ──────────────────────────────────────
-        ax = axes[0]
-        ax.loglog(N_arr, sigmas, marker=_marker(0), ms=5,
-                  color=_color(0), ls='none', zorder=3,
-                  label='Measured $\\sigma_h$')
-        N_fit = np.linspace(N_arr[0], N_arr[-1], 100)
-        ax.loglog(N_fit, np.exp(intercept) * N_fit**slope,
-                  color=_color(1), ls='--', lw=1.2,
-                  label=rf'Fit: $N^{{{slope:.3f}}}$')
-        ax.loglog(N_fit, sigmas[0] * (N_fit / N_arr[0])**(-0.5),
-                  color=_color(2), ls=':', lw=1.0, alpha=0.7,
-                  label=r'$N^{-1/2}$ reference')
-        ax.set_xlabel(r'$N$')
-        ax.set_ylabel(r'$\sigma_h$')
-        ax.set_title(rf'Fluctuation Scaling ({self.param_label}, '
-                     rf'$\varepsilon={eps}$)')
-        ax.legend()
-        _panel_label(ax, '(a)')
+            # ── Left: log-log scaling ──────────────────────────────────────
+            ax = axes[0]
+            ax.loglog(N_arr, sigmas, marker=_marker(0), ms=5,
+                      color=_color(0), ls='none', zorder=3,
+                      label='Measured $\\sigma_h$')
+            N_fit = np.linspace(N_arr[0], N_arr[-1], 100)
+            ax.loglog(N_fit, np.exp(intercept) * N_fit**slope,
+                      color=_color(1), ls='--', lw=1.2,
+                      label=rf'Fit: $N^{{{slope:.3f}}}$')
+            ax.loglog(N_fit, sigmas[0] * (N_fit / N_arr[0])**(-0.5),
+                      color=_color(2), ls=':', lw=1.0, alpha=0.7,
+                      label=r'$N^{-1/2}$ reference')
+            ax.set_xlabel(r'$N$')
+            ax.set_ylabel(r'$\sigma_h$')
+            ax.set_title(rf'Fluctuation Scaling ({self.param_label}, '
+                         rf'$\varepsilon={eps}$)')
+            ax.legend()
+            _panel_label(ax, '(a)')
 
-        # ── Right: mean convergence ────────────────────────────────────
-        ax = axes[1]
-        ax.semilogx(N_arr, means, marker=_marker(0), ms=5,
-                     color=_color(0), ls='-', lw=0.8)
-        h_inf = means[-1]
-        ax.axhline(y=h_inf, color=_color(1), linestyle='--', lw=0.8,
-                   label=rf'$\bar h \approx {h_inf:.4f}$')
-        ax.set_xlabel(r'$N$')
-        ax.set_ylabel(r'$\langle h_t \rangle$')
-        ax.set_title('Mean Field Convergence')
-        ax.legend()
-        _panel_label(ax, '(b)')
+            # ── Right: mean convergence ────────────────────────────────────
+            ax = axes[1]
+            ax.semilogx(N_arr, means, marker=_marker(0), ms=5,
+                         color=_color(0), ls='-', lw=0.8)
+            h_inf = means[-1]
+            ax.axhline(y=h_inf, color=_color(1), linestyle='--', lw=0.8,
+                       label=rf'$\bar h \approx {h_inf:.4f}$')
+            ax.set_xlabel(r'$N$')
+            ax.set_ylabel(r'$\langle h_t \rangle$')
+            ax.set_title('Mean Field Convergence')
+            ax.legend()
+            _panel_label(ax, '(b)')
 
-        plt.tight_layout()
-        fname = f'./{self.name}_eps{eps}_scaling.png'
-        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-        plt.show()
-        plt.close()
-        print(f"  -> Saved {fname}\n")
+            plt.tight_layout()
+            fname = f'./{self.name}_eps{eps}_scaling.png'
+            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
+            plt.show()
+            plt.close()
+            print(f"  -> Saved {fname}\n")
 
-        return slope
+        return {
+            'N_values':  N_arr,
+            'sigmas':    np.array(sigmas),
+            'means':     np.array(means),
+            'slope':     slope,
+            'intercept': intercept,
+            'r2':        r**2,
+        }
 
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 3: Distribution of h_t and rescaled collapse
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_distribution(self, eps, N_values=(100, 1000, 10000, 100000)):
-        _apply_style()
-
+    def analysis_distribution(self, eps, N_values=(100, 1000, 10000, 100000), T_show=2000, T_transient=1000000, plot=True):
+        """
+        Returns
+        -------
+        dict with keys: all_rescaled {N: array}, h_series {N: array},
+                        means {N: float}, stds {N: float}, shapiro_p {N: float}.
+        """
         print("=" * 60)
         print(f"ANALYSIS 3: Distribution & rescaled collapse"
               f"  ({self.name}, eps={eps})")
         print("=" * 60)
 
-        fig, axes = plt.subplots(1, 3, figsize=(FIG_WIDTH_2COL + 3.0, 3.5))
         all_rescaled = {}
+        h_series     = {}
+        dist_means   = {}
+        dist_stds    = {}
+        shapiro_ps   = {}
 
-        for i, N in enumerate(N_values):
-            h = self.simulate(N, eps, T_total=12000,
-                              T_transient=2000, seed=42)
-            h = h[np.isfinite(h)] 
+        for N in N_values:
+            h = self.simulate(N, eps, T_total=T_transient+T_show,
+                              T_transient=T_transient, seed=42)
+            h = h[np.isfinite(h)]
             if len(h) == 0:
                 print(f"  N={N:>6d}: simulation diverged, skipping")
                 continue
             h_mean, h_std = np.mean(h), np.std(h)
             rescaled = (h - h_mean) * np.sqrt(N)
-            all_rescaled[N] = rescaled
-
             _, shapiro_p = stats.shapiro(h[:5000])
+
+            h_series[N]     = h
+            all_rescaled[N] = rescaled
+            dist_means[N]   = h_mean
+            dist_stds[N]    = h_std
+            shapiro_ps[N]   = shapiro_p
             print(f"  N={N:>6d}: <h>={h_mean:.6f},"
                   f" sigma={h_std:.6f}, Shapiro p={shapiro_p:.4f}")
 
-            axes[0].hist(h, bins=60, density=True, alpha=0.45,
-                         color=_color(i), histtype='stepfilled',
-                         edgecolor=_color(i), linewidth=0.5,
-                         label=f'$N={N}$')
-            axes[1].hist(rescaled, bins=60, density=True, alpha=0.45,
-                         color=_color(i), histtype='stepfilled',
-                         edgecolor=_color(i), linewidth=0.5,
-                         label=f'$N={N}$')
-
         last_key = next(
             (N for N in reversed(N_values) if N in all_rescaled), None)
-        if last_key is None:
-            print("  All simulations diverged. Skipping plots.")
-            plt.close()
-            return
-        ref_std = np.std(all_rescaled[last_key])
-        xg = np.linspace(-4 * ref_std, 4 * ref_std, 200)
-        axes[1].plot(xg, stats.norm.pdf(xg, 0, ref_std),
-                     color='#000000', ls='-', lw=1.2, label='Gaussian')
 
-        axes[0].set_xlabel(r'$h_t$')
-        axes[0].set_ylabel('Density')
-        axes[0].set_title(r'Distribution of $h_t$')
-        axes[0].legend(fontsize=6.5)
-        _panel_label(axes[0], '(a)')
+        if plot:
+            if last_key is None:
+                print("  All simulations diverged. Skipping plots.")
+            else:
+                _apply_style()
+                fig, axes = plt.subplots(1, 3, figsize=(FIG_WIDTH_2COL + 3.0, 3.5))
 
-        axes[1].set_xlabel(r'$\frac{(h_t- \bar h)}{\sqrt{N}}$')
-        axes[1].set_ylabel('Density')
-        axes[1].set_title('Rescaled (should collapse)')
-        axes[1].legend(fontsize=6.5)
-        _panel_label(axes[1], '(b)')
+                for i, N in enumerate(N_values):
+                    if N not in h_series:
+                        continue
+                    axes[0].hist(h_series[N], bins=60, density=True, alpha=0.45,
+                                 color=_color(i), histtype='stepfilled',
+                                 edgecolor=_color(i), linewidth=0.5,
+                                 label=f'$N={N}$')
+                    axes[1].hist(all_rescaled[N], bins=60, density=True, alpha=0.45,
+                                 color=_color(i), histtype='stepfilled',
+                                 edgecolor=_color(i), linewidth=0.5,
+                                 label=f'$N={N}$')
 
-        h_largest = self.simulate(last_key, eps, T_total=12000,
-                                  T_transient=2000, seed=42)
-        h_largest = h_largest[np.isfinite(h_largest)]
-        if len(h_largest) > 0:
-            z = (h_largest - np.mean(h_largest)) / np.std(h_largest)
-            stats.probplot(z, dist="norm", plot=axes[2])
-            # Restyle the Q-Q points and fit line produced by probplot
-            axes[2].get_lines()[0].set(color=_color(0), marker=_marker(0),
-                                       ms=2.5, ls='none', markeredgewidth=0)
-            axes[2].get_lines()[1].set(color=_color(1), ls='--', lw=1.0)
-        axes[2].set_title(rf'Q-Q Plot ($N={last_key}$)')
-        _panel_label(axes[2], '(c)')
+                ref_std = np.std(all_rescaled[last_key])
+                xg = np.linspace(-4 * ref_std, 4 * ref_std, 200)
+                axes[1].plot(xg, stats.norm.pdf(xg, 0, ref_std),
+                             color='#000000', ls='-', lw=1.2, label='Gaussian')
 
-        plt.tight_layout()
-        fname = f'./{self.name}_eps{eps}_distribution.png'
-        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-        plt.show()
-        plt.close()
-        print(f"  -> Saved {fname}\n")
+                axes[0].set_xlabel(r'$h_t$')
+                axes[0].set_ylabel('Density')
+                axes[0].set_title(r'Distribution of $h_t$')
+                axes[0].legend(fontsize=6.5)
+                _panel_label(axes[0], '(a)')
+
+                axes[1].set_xlabel(r'$\frac{(h_t- \bar h)}{\sqrt{N}}$')
+                axes[1].set_ylabel('Density')
+                axes[1].set_title('Rescaled (should collapse)')
+                axes[1].legend(fontsize=6.5)
+                _panel_label(axes[1], '(b)')
+
+                h_largest = h_series[last_key]
+                z = (h_largest - np.mean(h_largest)) / np.std(h_largest)
+                stats.probplot(z, dist="norm", plot=axes[2])
+                axes[2].get_lines()[0].set(color=_color(0), marker=_marker(0),
+                                           ms=2.5, ls='none', markeredgewidth=0)
+                axes[2].get_lines()[1].set(color=_color(1), ls='--', lw=1.0)
+                axes[2].set_title(rf'Q-Q Plot ($N={last_key}$)')
+                _panel_label(axes[2], '(c)')
+
+                plt.tight_layout()
+                fname = f'./{self.name}_eps{eps}_distribution.png'
+                plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
+                plt.show()
+                plt.close()
+                print(f"  -> Saved {fname}\n")
+
+        return {
+            'h_series':     h_series,
+            'all_rescaled': all_rescaled,
+            'means':        dist_means,
+            'stds':         dist_stds,
+            'shapiro_p':    shapiro_ps,
+        }
 
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 4: Self-consistency check
     # ══════════════════════════════════════════════════════════════════════
     def analysis_self_consistency(self, eps, h_range=(0.01, 0.99), N_sc=10000,
-                                  T_sc=200000, T_trans_sc=50000):
+                                  T_sc=200000, T_trans_sc=50000, T_transient=1000000, T_show=2000, plot=True):
         """
         Parameters
         ----------
         h_range : (float, float)
             Range of candidate h_bar values. Set to cover the expected
             mean field of your map (e.g. (-0.5, 1.5) for Lozi).
+
+        Returns
+        -------
+        dict with keys: h_candidates, f_averages, residuals, h_star_list, h_sim_mean.
         """
-        _apply_style()
 
         print("=" * 60)
         print(f"ANALYSIS 4: Self-consistency  ({self.name}, eps={eps})")
@@ -633,8 +687,8 @@ class CoupledMapLattice:
             r1, r2 = residuals[idx], residuals[idx + 1]
             h_star_list.append(h1 - r1 * (h2 - h1) / (r2 - r1))
 
-        h_sim      = self.simulate(N_sc, eps, T_total=10000,
-                                   T_transient=3000, seed=42)
+        h_sim      = self.simulate(N_sc, eps, T_total=T_transient+T_show,
+                                   T_transient=T_transient, seed=42)
         h_sim_mean = np.mean(h_sim)
 
         print(f"  Self-consistent h_bar: {h_star_list}")
@@ -642,40 +696,53 @@ class CoupledMapLattice:
         if h_star_list:
             print(f"  |diff| = {abs(h_star_list[0] - h_sim_mean):.6f}")
 
-        fig, ax = plt.subplots(figsize=(FIG_WIDTH_1COL * 1.8, 3.5))
-        ax.plot(h_candidates, f_averages, color=_color(0), ls=_ls(0),
-                lw=1.2, label=r'$\langle f \rangle$ under $\rho^*$')
-        ax.plot(h_candidates, h_candidates, color=_color(1), ls='--',
-                lw=0.9, label=r'$y = \bar h$')
-        for hs in h_star_list:
-            ax.plot(hs, hs, marker=_marker(0), ms=7, zorder=5,
-                    color=_color(0), markerfacecolor='white',
-                    markeredgewidth=1.2,
-                    label=rf'Fixed point: ${hs:.4f}$')
-        ax.axvline(h_sim_mean, color=_color(2), ls='-.', lw=0.8,
-                   alpha=0.7,
-                   label=rf'Sim mean: ${h_sim_mean:.4f}$')
-        ax.set_xlabel(r'$\bar h$ (candidate)')
-        ax.set_ylabel(r'$\langle f \rangle$')
-        ax.set_title(rf'Self-Consistency ({self.param_label}, '
-                     rf'$\varepsilon={eps}$)')
-        ax.legend()
+        if plot:
+            _apply_style()
+            fig, ax = plt.subplots(figsize=(FIG_WIDTH_1COL * 1.8, 3.5))
+            ax.plot(h_candidates, f_averages, color=_color(0), ls=_ls(0),
+                    lw=1.2, label=r'$\langle f \rangle$ under $\rho^*$')
+            ax.plot(h_candidates, h_candidates, color=_color(1), ls='--',
+                    lw=0.9, label=r'$y = \bar h$')
+            for hs in h_star_list:
+                ax.plot(hs, hs, marker=_marker(0), ms=7, zorder=5,
+                        color=_color(0), markerfacecolor='white',
+                        markeredgewidth=1.2,
+                        label=rf'Fixed point: ${hs:.4f}$')
+            ax.axvline(h_sim_mean, color=_color(2), ls='-.', lw=0.8,
+                       alpha=0.7,
+                       label=rf'Sim mean: ${h_sim_mean:.4f}$')
+            ax.set_xlabel(r'$\bar h$ (candidate)')
+            ax.set_ylabel(r'$\langle f \rangle$')
+            ax.set_title(rf'Self-Consistency ({self.param_label}, '
+                         rf'$\varepsilon={eps}$)')
+            ax.legend()
 
-        plt.tight_layout()
-        fname = f'./{self.name}_eps{eps}_self_consistency.png'
-        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-        plt.show()
-        plt.close()
-        print(f"  -> Saved {fname}\n")
+            plt.tight_layout()
+            fname = f'./{self.name}_eps{eps}_self_consistency.png'
+            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
+            plt.show()
+            plt.close()
+            print(f"  -> Saved {fname}\n")
+
+        return {
+            'h_candidates': h_candidates,
+            'f_averages':   f_averages,
+            'residuals':    residuals,
+            'h_star_list':  h_star_list,
+            'h_sim_mean':   h_sim_mean,
+        }
 
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 5: Phase diagram — alpha(eps)
     # ══════════════════════════════════════════════════════════════════════
     def analysis_phase_diagram(self, eps_values=None,
                                N_values=(100, 1000, 10000, 100000),
-                               n_jobs=1):
-        _apply_style()
-
+                               n_jobs=1, plot=True):
+        """
+        Returns
+        -------
+        dict with keys: eps_values, alphas, alpha_errors.
+        """
         if eps_values is None:
             eps_values = np.arange(0.01, 0.9, 0.03)
         comm, rank, size = self._mpi()
@@ -719,50 +786,58 @@ class CoupledMapLattice:
         alphas       = np.array([r[1] for r in all_results])
         alpha_errors = np.array([r[2] for r in all_results])
 
-        fig, axes = plt.subplots(1, 2, figsize=(FIG_WIDTH_2COL, 3.2))
+        if plot:
+            _apply_style()
+            fig, axes = plt.subplots(1, 2, figsize=(FIG_WIDTH_2COL, 3.2))
 
-        # ── Left: alpha(eps) ───────────────────────────────────────────
-        ax = axes[0]
-        ax.errorbar(eps_values, alphas, yerr=alpha_errors,
-                     fmt=_marker(0), ms=4, color=_color(0),
-                     ecolor=_color(2), capsize=2, elinewidth=0.6,
-                     lw=0.8, ls='-')
-        ax.axhline(0.5, color=_color(1), ls='--', lw=0.9,
-                   label=r'CLT ($\alpha=1/2$)')
-        ax.fill_between(eps_values, 0.45, 0.55, alpha=0.08,
-                        color=_color(2))
-        ax.set_xlabel(r'$\varepsilon$')
-        ax.set_ylabel(r'$\alpha$')
-        ax.set_title(f'Scaling Exponent ({self.param_label})')
-        ax.legend()
-        ax.set_ylim(-0.1, 1.1)
-        _panel_label(ax, '(a)')
+            # ── Left: alpha(eps) ───────────────────────────────────────────
+            ax = axes[0]
+            ax.errorbar(eps_values, alphas, yerr=alpha_errors,
+                         fmt=_marker(0), ms=4, color=_color(0),
+                         ecolor=_color(2), capsize=2, elinewidth=0.6,
+                         lw=0.8, ls='-')
+            ax.axhline(0.5, color=_color(1), ls='--', lw=0.9,
+                       label=r'CLT ($\alpha=1/2$)')
+            ax.fill_between(eps_values, 0.45, 0.55, alpha=0.08,
+                            color=_color(2))
+            ax.set_xlabel(r'$\varepsilon$')
+            ax.set_ylabel(r'$\alpha$')
+            ax.set_title(f'Scaling Exponent ({self.param_label})')
+            ax.legend()
+            ax.set_ylim(-0.1, 1.1)
+            _panel_label(ax, '(a)')
 
-        # ── Right: scaling at selected couplings ───────────────────────
-        ax = axes[1]
-        eps_samples = [0.05, 0.3, 0.45, 0.5, 0.75]
-        for j, eps_s in enumerate(eps_samples):
-            sigs = [np.std(self.simulate(
-                        N, eps_s, T_total=6000, T_transient=2000, seed=42))
-                    for N in N_values]
-            ax.loglog(N_arr, sigs, marker=_marker(j), ms=4,
-                      color=_color(j), ls=_ls(j), lw=0.8,
-                      label=rf'$\varepsilon={eps_s}$')
-        ax.loglog(N_arr, 0.3 * N_arr**(-0.5),
-                  color=_color(0), ls=':', lw=0.7, alpha=0.5,
-                  label=r'$N^{-1/2}$')
-        ax.set_xlabel(r'$N$')
-        ax.set_ylabel(r'$\sigma_h$')
-        ax.set_title('Scaling at Different Couplings')
-        ax.legend(fontsize=6.5)
-        _panel_label(ax, '(b)')
+            # ── Right: scaling at selected couplings ───────────────────────
+            ax = axes[1]
+            eps_samples = [0.05, 0.3, 0.45, 0.5, 0.75]
+            for j, eps_s in enumerate(eps_samples):
+                sigs = [np.std(self.simulate(
+                            N, eps_s, T_total=6000, T_transient=2000, seed=42))
+                        for N in N_values]
+                ax.loglog(N_arr, sigs, marker=_marker(j), ms=4,
+                          color=_color(j), ls=_ls(j), lw=0.8,
+                          label=rf'$\varepsilon={eps_s}$')
+            ax.loglog(N_arr, 0.3 * N_arr**(-0.5),
+                      color=_color(0), ls=':', lw=0.7, alpha=0.5,
+                      label=r'$N^{-1/2}$')
+            ax.set_xlabel(r'$N$')
+            ax.set_ylabel(r'$\sigma_h$')
+            ax.set_title('Scaling at Different Couplings')
+            ax.legend(fontsize=6.5)
+            _panel_label(ax, '(b)')
 
-        plt.tight_layout()
-        fname = f'./{self.name}_phase_diagram.png'
-        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-        plt.show()
-        plt.close()
-        print(f"  -> Saved {fname}\n")
+            plt.tight_layout()
+            fname = f'./{self.name}_phase_diagram.png'
+            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
+            plt.show()
+            plt.close()
+            print(f"  -> Saved {fname}\n")
+
+        return {
+            'eps_values':   eps_values,
+            'alphas':       alphas,
+            'alpha_errors': alpha_errors,
+        }
 
     # ══════════════════════════════════════════════════════════════════════
     # BIFURCATION DIAGRAM (single-site map g = (1-eps)*f(state) + eps*h_bar)
@@ -771,8 +846,8 @@ class CoupledMapLattice:
                             eps_range=(0.0, 1.0), eps_fixed=0.1,
                             map_factory=None, param_range=(0.5, 2.0),
                             h_bar=0.65, n_param=500,
-                            T_iter=10000, T_trans=9500, sweep_label=None, x_lim=None, y_lim=(-1.5,1.5),
-                            component=0):
+                            T_iter=10000, T_trans=9500, sweep_label=None, x_lim=None, y_lim=None,
+                            component=0, plot=True):
         """
         Bifurcation diagram of the single-site map driven by a fixed h_bar.
 
@@ -784,8 +859,11 @@ class CoupledMapLattice:
         sweep_label : str, optional
             Name of the swept parameter for axis/title labels (e.g. 'a').
             Only used when bifurcation_param='map_param'.
+
+        Returns
+        -------
+        dict with keys: param, x (scattered orbit points).
         """
-        _apply_style()
 
         if bifurcation_param == 'eps':
             param_values = np.linspace(eps_range[0], eps_range[1], n_param)
@@ -837,29 +915,36 @@ class CoupledMapLattice:
                 all_param.append(p)
                 all_x.append(float(x[0]))
 
-        fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4.5))
-        ax.scatter(all_param, all_x, s=0.02, c='#000000', alpha=0.3,
-                   rasterized=True)
-        comp_label = (r'$x$', r'$y$', r'$z$')[component] if component < 3 else rf'$s_{{{component}}}$'
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(comp_label)
-        if bifurcation_param == 'eps':
-            title = (rf'$(1-\varepsilon)\,f(x) + \varepsilon\,\bar h$'
-                     rf'  ({self.param_label}, $\bar h={h_bar}$)')
-        else:
-            title = (rf'$(1-\varepsilon)\,f(x) + \varepsilon\,\bar h$'
-                     rf'  ($\varepsilon={eps_fixed}$, $\bar h={h_bar}$)')
-        ax.set_title(title)
-        ax.set_xlim(x_lim)
-        ax.set_ylim(y_lim)
+        all_param = np.array(all_param)
+        all_x     = np.array(all_x)
 
-        plt.tight_layout()
-        comp_suffix = f'_c{component}' if component != 0 else ''
-        fname = f'./{self.name}_bifurcation_{bifurcation_param}{comp_suffix}.png'
-        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-        plt.show()
-        plt.close()
-        print(f"  -> Saved {fname}\n")
+        if plot:
+            _apply_style()
+            fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4.5))
+            ax.scatter(all_param, all_x, s=0.02, c='#000000', alpha=0.3,
+                       rasterized=True)
+            comp_label = (r'$x$', r'$y$', r'$z$')[component] if component < 3 else rf'$s_{{{component}}}$'
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(comp_label)
+            if bifurcation_param == 'eps':
+                title = (rf'$(1-\varepsilon)\,f(x) + \varepsilon\,\bar h$'
+                         rf'  ({self.param_label}, $\bar h={h_bar}$)')
+            else:
+                title = (rf'$(1-\varepsilon)\,f(x) + \varepsilon\,\bar h$'
+                         rf'  ($\varepsilon={eps_fixed}$, $\bar h={h_bar}$)')
+            ax.set_title(title)
+            ax.set_xlim(x_lim)
+            ax.set_ylim(y_lim)
+
+            plt.tight_layout()
+            comp_suffix = f'_c{component}' if component != 0 else ''
+            fname = f'./{self.name}_bifurcation_{bifurcation_param}{comp_suffix}.png'
+            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
+            plt.show()
+            plt.close()
+            print(f"  -> Saved {fname}\n")
+
+        return {'param': all_param, 'x': all_x}
 
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 6: Mean-Field Bifurcation Diagram
@@ -870,8 +955,8 @@ class CoupledMapLattice:
                                        param_range=(0.5, 3.0),
                                        N=10000, n_param=500,
                                        sweep_label=None,
-                                       T_total=10000, T_transient=9500,
-                                       seed=42, n_jobs=1):
+                                       T_total=100000, T_transient=95500,
+                                       seed=42, n_jobs=1, plot=True):
         """
         Bifurcation diagram of the mean field h_t from the full
         N-body simulation.
@@ -881,8 +966,11 @@ class CoupledMapLattice:
         sweep : 'map_param'
             Sweep a map parameter. Requires
             map_factory(p) -> CoupledMapLattice (or a plain 1D callable).
+
+        Returns
+        -------
+        dict with keys: param, h (all scattered (param, h_t) pairs).
         """
-        _apply_style()
 
         comm, rank, size = self._mpi()
         if sweep == 'eps':
@@ -947,25 +1035,29 @@ class CoupledMapLattice:
         all_h     = np.array([h for _, h in all_pairs])
         print(f"  Total points: {len(all_h)}")
 
-        fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4.0))
-        ax.scatter(all_param, all_h, s=0.05, c='#000000', alpha=0.4,
-                   rasterized=True)
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(r'$h_t$ (mean field)')
-        ax.set_title(f'Mean-Field Bifurcation ({title_fixed})')
+        if plot:
+            _apply_style()
+            fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4.0))
+            ax.scatter(all_param, all_h, s=0.05, c='#000000', alpha=0.4,
+                       rasterized=True)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(r'$h_t$ (mean field)')
+            ax.set_title(f'Mean-Field Bifurcation ({title_fixed})')
 
-        if len(all_h) > 0:
-            y_lo, y_hi = np.percentile(all_h, [0.1, 99.9])
-            margin = 0.2 * max(y_hi - y_lo, 0.01)
-            ax.set_ylim(y_lo - margin, y_hi + margin)
+            if len(all_h) > 0:
+                y_lo, y_hi = np.percentile(all_h, [0.1, 99.9])
+                margin = 0.2 * max(y_hi - y_lo, 0.01)
+                ax.set_ylim(y_lo - margin, y_hi + margin)
 
-        plt.tight_layout()
-        fname = (f'./{self.name}_meanfield_bif_{sweep}_'
-                 f'{fixed_label_file}_N{N}.png')
-        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-        plt.show()
-        plt.close()
-        print(f"  -> Saved {fname}\n")
+            plt.tight_layout()
+            fname = (f'./{self.name}_meanfield_bif_{sweep}_'
+                     f'{fixed_label_file}_N{N}.png')
+            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
+            plt.show()
+            plt.close()
+            print(f"  -> Saved {fname}\n")
+
+        return {'param': all_param, 'h': all_h}
 
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 7: Minimum N to prevent escape
@@ -994,15 +1086,18 @@ class CoupledMapLattice:
                               map_factory=None,
                               param_range=(1.0, 3.0),
                               n_param=60, N_min=1, N_max=100000,
-                              T_total=10000, x_bound=20, n_trials=3,
-                              seed=42, n_jobs=1, sweep_label=None):
+                              T_total=100000, x_bound=20, n_trials=3,
+                              seed=42, n_jobs=1, sweep_label=None, plot=True):
         """
         sweep : 'eps' or 'map_param' (requires map_factory).
         sweep_label : str, optional
             Name of the swept parameter for axis/title labels (e.g. 'a').
             Only used when sweep='map_param'.
+
+        Returns
+        -------
+        (results_param, results_N) — lists of parameter values and min N.
         """
-        _apply_style()
 
         comm, rank, size = self._mpi()
         if sweep == 'eps':
@@ -1072,32 +1167,101 @@ class CoupledMapLattice:
         p_inf    = [p for p, n in zip(results_param, results_N)
                     if n is None]
 
-        fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL * 0.75, 3.5))
-        if p_finite:
-            ax.semilogy(p_finite, N_finite, marker=_marker(0), ms=4,
-                        color=_color(0), ls='-', lw=0.9,
-                        label=r'$N_{\mathrm{min}}$ (bounded)')
-        if p_inf:
-            ax.axvspan(min(p_inf) - 0.01, max(p_inf) + 0.01,
-                       color=_color(2), alpha=0.10,
-                       label=rf'Escapes for all $N \leq {N_max}$')
-            for pi in p_inf:
-                ax.semilogy(pi, N_max, marker='x', ms=6, mew=1.2,
-                            color=_color(1))
+        if plot:
+            _apply_style()
+            fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL * 0.75, 3.5))
+            if p_finite:
+                ax.semilogy(p_finite, N_finite, marker=_marker(0), ms=4,
+                            color=_color(0), ls='-', lw=0.9,
+                            label=r'$N_{\mathrm{min}}$ (bounded)')
+            if p_inf:
+                ax.axvspan(min(p_inf) - 0.01, max(p_inf) + 0.01,
+                           color=_color(2), alpha=0.10,
+                           label=rf'Escapes for all $N \leq {N_max}$')
+                for pi in p_inf:
+                    ax.semilogy(pi, N_max, marker='x', ms=6, mew=1.2,
+                                color=_color(1))
 
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(r'$N_{\mathrm{min}}$')
-        ax.set_title(f'Minimum $N$ to Prevent Escape  ({title_fixed})')
-        ax.legend()
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(r'$N_{\mathrm{min}}$')
+            ax.set_title(f'Minimum $N$ to Prevent Escape  ({title_fixed})')
+            ax.legend()
 
-        plt.tight_layout()
-        fname = f'./{self.name}_min_N_escape_{sweep}.png'
-        plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-        plt.show()
-        plt.close()
-        print(f"  -> Saved {fname}\n")
+            plt.tight_layout()
+            fname = f'./{self.name}_min_N_escape_{sweep}.png'
+            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
+            plt.show()
+            plt.close()
+            print(f"  -> Saved {fname}\n")
 
         return results_param, results_N
+
+    # ── Data persistence ───────────────────────────────────────────────────
+    def save_data(self, data, fname):
+        """
+        Save analysis data returned by any analysis_* method to disk.
+
+        Uses numpy .npz for plain arrays / dicts of arrays; falls back
+        to pickle for nested structures (e.g. dicts of dicts).
+
+        Parameters
+        ----------
+        data  : dict or tuple  — return value of an analysis_* method.
+        fname : str            — filename (e.g. 'scaling.npz' or 'dist.pkl').
+
+        Returns
+        -------
+        Path : the saved file path.
+        """
+        import pickle
+
+        path = self._savepath(fname)
+
+        if fname.endswith('.pkl'):
+            with open(path, 'wb') as fh:
+                pickle.dump(data, fh)
+        else:
+            # Flatten one level of nested dicts so npz can handle them
+            flat = {}
+            src  = data if isinstance(data, dict) else {'data': data}
+            for k, v in src.items():
+                if isinstance(v, dict):
+                    for kk, vv in v.items():
+                        flat[f'{k}__{kk}'] = np.asarray(vv)
+                elif isinstance(v, (list, tuple)):
+                    try:
+                        flat[k] = np.asarray(v)
+                    except Exception:
+                        with open(str(path).replace('.npz', '.pkl'), 'wb') as fh:
+                            pickle.dump(data, fh)
+                        print(f'  -> Data saved (pickle fallback) to '
+                              f'{str(path).replace(".npz", ".pkl")}')
+                        return path
+                else:
+                    try:
+                        flat[k] = np.asarray(v)
+                    except Exception:
+                        flat[k] = np.array(str(v))
+            np.savez_compressed(path, **flat)
+
+        print(f'  -> Data saved to {path}')
+        return path
+
+    @staticmethod
+    def load_data(fpath):
+        """
+        Load data previously saved with save_data().
+
+        Returns a dict (npz) or the original object (pickle).
+        """
+        import pickle
+
+        fpath = str(fpath)
+        if fpath.endswith('.pkl'):
+            with open(fpath, 'rb') as fh:
+                return pickle.load(fh)
+        data = np.load(fpath, allow_pickle=True)
+        return dict(data)
 
     # ── Convenience: run all standard analyses ─────────────────────────────
     def run_all(self, eps, N_values=(100, 1000, 10000, 100000)):

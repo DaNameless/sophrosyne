@@ -19,75 +19,207 @@ except ImportError:
 # ══════════════════════════════════════════════════════════════════════════════
 
 sys_tent = CoupledMapLattice.from_tent(
-    a=3, output_dir="../../outputs/papers_figures/tent"
+    a=3, output_dir="../../outputs/papers_figures/tent_a3"
 )
 
 
 if rank == 0:
     # ── Trajectory plots ──────────────────────────────────────────────────────
-    sys_tent.plot_trajectories(
-        10000, eps=0, n_show=5, T_total=15, T_transient=0,
-        save=True, y_lim=(-5, 2)
+    data = sys_tent.plot_trajectories(
+        10000, eps=0, n_show=5, T_total=20, T_transient=0,
+        save=True, y_lim=(-1, 1.5)
     )
-    sys_tent.plot_trajectories(
-        10000, eps=0.25, n_show=5, T_total=15, T_transient=0,
-        save=True, y_lim=(-5, 2)
+    sys_tent.save_data(data, 'trajectories_eps0.npz')
+
+    data = sys_tent.plot_trajectories(
+        10000, eps=0.25, n_show=5, T_total=20, T_transient=0,
+        save=True, y_lim=(-1, 1.5)
     )
-    sys_tent.plot_trajectories(
+    sys_tent.save_data(data, 'trajectories_eps0.25.npz')
+
+    data = sys_tent.plot_trajectories(
         10000, eps=0.5, n_show=5,
-        T_total=int(1e6) + 15, T_transient=int(1e6),
+        T_total=int(1e6) + 20, T_transient=int(1e6),
         save=True, y_lim=(0, 1.5)
     )
-    sys_tent.plot_trajectories(
-        10000, eps=0.75, n_show=5, T_total=15, T_transient=0,
-        save=True, y_lim=(0, 1.5)
+    sys_tent.save_data(data, 'trajectories_eps0.5.npz')
+
+    data = sys_tent.plot_trajectories(
+        10000, eps=0.75, n_show=5, T_total=20, T_transient=0,
+        save=True, y_lim=(-1, 1.5)
     )
+    sys_tent.save_data(data, 'trajectories_eps0.75.npz')
 
     # ── Core statistical analyses ─────────────────────────────────────────────
-    sys_tent.analysis_timeseries(eps=0.5, N_values=[1000, 10000, 100000, 1000000])
-    sys_tent.analysis_fluctuation_scaling(eps=0.5, N_values=[1000, 10000, 100000, 1000000])
-    sys_tent.analysis_distribution(eps=0.5, N_values=[1000, 10000, 100000, 1000000])
-    sys_tent.analysis_self_consistency(eps=0.5)
+    data = sys_tent.analysis_timeseries(eps=0.5, N_values=[5000, 10000, 100000, 1000000])
+    sys_tent.save_data(data, 'timeseries_eps0.5.pkl')
+
+    data = sys_tent.analysis_fluctuation_scaling(eps=0.5, N_values=[5000, 10000, 100000, 1000000])
+    sys_tent.save_data(data, 'scaling_eps0.5.npz')
+
+    data = sys_tent.analysis_distribution(eps=0.5, N_values=[5000, 10000, 100000, 1000000])
+    sys_tent.save_data(data, 'distribution_eps0.5.pkl')
+
+    data = sys_tent.analysis_self_consistency(eps=0.5)
+    sys_tent.save_data(data, 'self_consistency_eps0.5.npz')
 
     # ── Bifurcation diagrams ──────────────────────────────────────────────────
-    sys_tent.bifurcation_diagram(bifurcation_param="eps", h_bar=0.684, y_lim=(-0.5, 1.5))
-    sys_tent.bifurcation_diagram(
+    data = sys_tent.bifurcation_diagram(bifurcation_param="eps", h_bar=0.684, y_lim=(-0.5, 1.5))
+    sys_tent.save_data(data, 'bifurcation_eps.npz')
+
+    data = sys_tent.bifurcation_diagram(
         bifurcation_param='map_param',
         map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
-        param_range=(0, 3), eps_fixed=0.5, h_bar=0.684
+        param_range=(1, 3), eps_fixed=0.5, h_bar=0.684, sweep_label="a", y_lim=(0, 1.5)
     )
+    sys_tent.save_data(data, 'bifurcation_map_param_a.npz')
 
 # ── Mean-field bifurcation (MPI-aware) ────────────────────────────────────────
-sys_tent.analysis_meanfield_bifurcation(N=100000, n_param=2000)
+data = sys_tent.analysis_meanfield_bifurcation(N=10000, n_param=2000)
+if rank == 0:
+    sys_tent.save_data(data, 'meanfield_bif_eps_N10000.npz')
 
-sys_tent.analysis_meanfield_bifurcation(
+data = sys_tent.analysis_meanfield_bifurcation(N=5000, n_param=2000)
+if rank == 0:
+    sys_tent.save_data(data, 'meanfield_bif_eps_N5000.npz')
+
+data = sys_tent.analysis_meanfield_bifurcation(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
     param_range=(2, 3.4), eps_fixed=0.5,
-    sweep_label="a", n_param=2000, N=100000
+    sweep_label="a", n_param=2000, N=10000
 )
+if rank == 0:
+    sys_tent.save_data(data, 'meanfield_bif_map_param_a_eps0.5_N10000.npz')
+
 
 # ── Minimum N to prevent escape (MPI-aware) ───────────────────────────────────
-sys_tent.analysis_min_N_escape(
+params, N_vals = sys_tent.analysis_min_N_escape(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
     param_range=(2, 3.4),
     eps_fixed=0.5,
     n_param=1000,
-    N_max=1000000,
+    N_max=100000,
     sweep_label="a"
 )
+if rank == 0:
+    sys_tent.save_data({'param': params, 'N_min': N_vals}, 'min_N_map_param_a_eps0.5.npz')
 
-sys_tent.analysis_min_N_escape(
+params, N_vals = sys_tent.analysis_min_N_escape(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
     param_range=(2, 3.4),
     eps_fixed=0.4,
     n_param=1000,
-    N_max=1000000,
+    N_max=100000,
     sweep_label="a"
 )
+if rank == 0:
+    sys_tent.save_data({'param': params, 'N_min': N_vals}, 'min_N_map_param_a_eps0.4.npz')
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TENT MAP   a = 2.3, eps = 0.3
+# ══════════════════════════════════════════════════════════════════════════════
+
+sys_tent2 = CoupledMapLattice.from_tent(
+    a=2.3, output_dir="../../outputs/papers_figures/tent_a2.3"
+)
+
+
+if rank == 0:
+    # ── Trajectory plots ──────────────────────────────────────────────────────
+    data = sys_tent2.plot_trajectories(
+        50, eps=0, n_show=5, T_total=35, T_transient=0,
+        save=True, y_lim=(-1, 1.5)
+    )
+    sys_tent2.save_data(data, 'trajectories_eps0.npz')
+
+    data = sys_tent2.plot_trajectories(
+        50, eps=0.05, n_show=5, T_total=35, T_transient=0,
+        save=True, y_lim=(-1, 1.5)
+    )
+    sys_tent2.save_data(data, 'trajectories_eps0.05.npz')
+
+    data = sys_tent2.plot_trajectories(
+        50, eps=0.3, n_show=5,
+        T_total=int(1e6) + 35, T_transient=int(1e6),
+        save=True, y_lim=(0, 1.5)
+    )
+    sys_tent2.save_data(data, 'trajectories_eps0.3.npz')
+
+    data = sys_tent2.plot_trajectories(
+        50, eps=0.6, n_show=5, T_total=35, T_transient=0,
+        save=True, y_lim=(-1, 1.5)
+    )
+    sys_tent2.save_data(data, 'trajectories_eps0.6.npz')
+
+    # ── Core statistical analyses ─────────────────────────────────────────────
+    data = sys_tent2.analysis_timeseries(eps=0.3, N_values=[1000, 10000, 100000, 1000000])
+    sys_tent2.save_data(data, 'timeseries_eps0.3.pkl')
+
+    data = sys_tent2.analysis_fluctuation_scaling(eps=0.3, N_values=[1000, 10000, 100000, 1000000])
+    sys_tent2.save_data(data, 'scaling_eps0.3.npz')
+
+    data = sys_tent2.analysis_distribution(eps=0.3, N_values=[1000, 10000, 100000, 1000000])
+    sys_tent2.save_data(data, 'distribution_eps0.3.pkl')
+
+    data = sys_tent2.analysis_distribution(eps=0.25, N_values=[1000, 10000, 100000, 1000000])
+    sys_tent2.save_data(data, 'distribution_eps0.25.pkl')
+
+    data = sys_tent2.analysis_self_consistency(eps=0.3)
+    sys_tent2.save_data(data, 'self_consistency_eps0.3.npz')
+
+    # ── Bifurcation diagrams ──────────────────────────────────────────────────
+    data = sys_tent2.bifurcation_diagram(bifurcation_param="eps", h_bar=0.636, y_lim=(-0.5, 1.5))
+    sys_tent2.save_data(data, 'bifurcation_eps_hbar0.636.npz')
+
+    data = sys_tent2.bifurcation_diagram(
+        bifurcation_param='map_param',
+        map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
+        param_range=(0, 3), eps_fixed=0.5, h_bar=0.636, sweep_label="a"
+    )
+    sys_tent2.save_data(data, 'bifurcation_map_param_a_hbar0.636.npz')
+
+# ── Mean-field bifurcation (MPI-aware) ────────────────────────────────────────
+data = sys_tent2.analysis_meanfield_bifurcation(N=10000, n_param=2000)
+if rank == 0:
+    sys_tent2.save_data(data, 'meanfield_bif_eps_N10000_v2.npz')
+
+data = sys_tent2.analysis_meanfield_bifurcation(
+    sweep='map_param',
+    map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
+    param_range=(2, 3.4), eps_fixed=0.5,
+    sweep_label="a", n_param=2000, N=10000
+)
+if rank == 0:
+    sys_tent2.save_data(data, 'meanfield_bif_map_param_a_eps0.5_N10000_v2.npz')
+
+
+# ── Minimum N to prevent escape (MPI-aware) ───────────────────────────────────
+params, N_vals = sys_tent2.analysis_min_N_escape(
+    sweep='map_param',
+    map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
+    param_range=(2, 3.4),
+    eps_fixed=0.5,
+    n_param=1000,
+    N_max=100000,
+    sweep_label="a"
+)
+if rank == 0:
+    sys_tent2.save_data({'param': params, 'N_min': N_vals}, 'min_N_map_param_a_eps0.5_v2.npz')
+
+params, N_vals = sys_tent2.analysis_min_N_escape(
+    sweep='map_param',
+    map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
+    param_range=(2, 3.4),
+    eps_fixed=0.4,
+    n_param=1000,
+    N_max=100000,
+    sweep_label="a"
+)
+if rank == 0:
+    sys_tent2.save_data({'param': params, 'N_min': N_vals}, 'min_N_map_param_a_eps0.4_v2.npz')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGISTIC MAP   r = 4.2, eps = 0.35
@@ -99,69 +231,94 @@ sys_logistic = CoupledMapLattice.from_logistic(
 
 if rank == 0:
     # ── Trajectory plots ──────────────────────────────────────────────────────
-    sys_logistic.plot_trajectories(
+    data = sys_logistic.plot_trajectories(
         10000, eps=0, n_show=10, T_total=15, T_transient=0,
         save=True, y_lim=(-0.5, 1.25)
     )
-    sys_logistic.plot_trajectories(
+    sys_logistic.save_data(data, 'trajectories_eps0.npz')
+
+    data = sys_logistic.plot_trajectories(
         10000, eps=0.05, n_show=10, T_total=15, T_transient=0,
         save=True, y_lim=(-0.5, 1.25)
     )
-    sys_logistic.plot_trajectories(
+    sys_logistic.save_data(data, 'trajectories_eps0.05.npz')
+
+    data = sys_logistic.plot_trajectories(
         10000, eps=0.35, n_show=5,
         T_total=int(1e6) + 15, T_transient=int(1e6),
         save=True, y_lim=(0.3, 1.0)
     )
-    sys_logistic.plot_trajectories(
+    sys_logistic.save_data(data, 'trajectories_eps0.35.npz')
+
+    data = sys_logistic.plot_trajectories(
         10000, eps=0.75, n_show=5, T_total=15, T_transient=0,
         save=True, y_lim=(-0.5, 1.25)
     )
+    sys_logistic.save_data(data, 'trajectories_eps0.75.npz')
 
     # ── Core statistical analyses ─────────────────────────────────────────────
-    sys_logistic.analysis_timeseries(eps=0.35, N_values=[1000, 10000, 100000, 1000000])
-    sys_logistic.analysis_fluctuation_scaling(eps=0.35, N_values=[1000, 10000, 100000, 1000000])
-    sys_logistic.analysis_distribution(eps=0.35, N_values=[1000, 10000, 100000, 1000000])
-    sys_logistic.analysis_self_consistency(eps=0.35)
+    data = sys_logistic.analysis_timeseries(eps=0.35, N_values=[1000, 10000, 100000, 1000000])
+    sys_logistic.save_data(data, 'timeseries_eps0.35.pkl')
+
+    data = sys_logistic.analysis_fluctuation_scaling(eps=0.35, N_values=[1000, 10000, 100000, 1000000])
+    sys_logistic.save_data(data, 'scaling_eps0.35.npz')
+
+    data = sys_logistic.analysis_distribution(eps=0.35, N_values=[1000, 10000, 100000, 1000000])
+    sys_logistic.save_data(data, 'distribution_eps0.35.pkl')
+
+    data = sys_logistic.analysis_self_consistency(eps=0.35)
+    sys_logistic.save_data(data, 'self_consistency_eps0.35.npz')
 
     # ── Bifurcation diagrams ──────────────────────────────────────────────────
-    sys_logistic.bifurcation_diagram(bifurcation_param="eps", h_bar=0.685, y_lim=(-0.5, 1.5))
-    sys_logistic.bifurcation_diagram(
+    data = sys_logistic.bifurcation_diagram(bifurcation_param="eps", h_bar=0.685, y_lim=(-0.5, 1.5))
+    sys_logistic.save_data(data, 'bifurcation_eps.npz')
+
+    data = sys_logistic.bifurcation_diagram(
         bifurcation_param='map_param',
         map_factory=lambda r: CoupledMapLattice.from_logistic(r=r),
         param_range=(3.0, 5.0), eps_fixed=0.35,
         h_bar=0.685, sweep_label='r'
     )
+    sys_logistic.save_data(data, 'bifurcation_map_param_r.npz')
 
 # ── Mean-field bifurcation (MPI-aware) ────────────────────────────────────────
-sys_logistic.analysis_meanfield_bifurcation(N=100000, n_param=2000)
+data = sys_logistic.analysis_meanfield_bifurcation(N=10000, n_param=2000)
+if rank == 0:
+    sys_logistic.save_data(data, 'meanfield_bif_eps_N10000.npz')
 
-sys_logistic.analysis_meanfield_bifurcation(
+data = sys_logistic.analysis_meanfield_bifurcation(
     sweep='map_param',
     map_factory=lambda r: CoupledMapLattice.from_logistic(r=r),
     param_range=(3.0, 5.0), eps_fixed=0.35,
-    sweep_label='r', n_param=2000, N=100000
+    sweep_label='r', n_param=2000, N=10000
 )
+if rank == 0:
+    sys_logistic.save_data(data, 'meanfield_bif_map_param_r_eps0.35_N10000.npz')
 
 # ── Minimum N to prevent escape (MPI-aware) ───────────────────────────────────
-sys_logistic.analysis_min_N_escape(
+params, N_vals = sys_logistic.analysis_min_N_escape(
     sweep='map_param',
     map_factory=lambda r: CoupledMapLattice.from_logistic(r=r),
     param_range=(4, 5),
     eps_fixed=0.35,
     n_param=1000,
-    N_max=1000000,
+    N_max=100000,
     sweep_label="r"
 )
+if rank == 0:
+    sys_logistic.save_data({'param': params, 'N_min': N_vals}, 'min_N_map_param_r_eps0.35.npz')
 
-sys_logistic.analysis_min_N_escape(
+params, N_vals = sys_logistic.analysis_min_N_escape(
     sweep='map_param',
     map_factory=lambda r: CoupledMapLattice.from_logistic(r=r),
     param_range=(4, 5),
     eps_fixed=0.2,
     n_param=1000,
-    N_max=1000000,
+    N_max=100000,
     sweep_label='r'
 )
+if rank == 0:
+    sys_logistic.save_data({'param': params, 'N_min': N_vals}, 'min_N_map_param_r_eps0.2.npz')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -174,90 +331,127 @@ sys_lozi = CoupledMapLattice.from_lozi(
 
 if rank == 0:
     # ── Trajectory plots (x and y components) ────────────────────────────────
-    sys_lozi.plot_trajectories(
+    data = sys_lozi.plot_trajectories(
         10000, eps=0, n_show=5, T_total=60, T_transient=0,
         save=True, y_lim=(-5, 1.5)
     )
-    sys_lozi.plot_trajectories(
+    sys_lozi.save_data(data, 'trajectories_eps0_c0.npz')
+
+    data = sys_lozi.plot_trajectories(
         10000, eps=0, n_show=5, T_total=60, T_transient=0,
         save=True, y_lim=(-5, 1), component=1
     )
-    sys_lozi.plot_trajectories(
+    sys_lozi.save_data(data, 'trajectories_eps0_c1.npz')
+
+    data = sys_lozi.plot_trajectories(
         10000, eps=0.1, n_show=5, T_total=60, T_transient=0,
         save=True, y_lim=(-5, 1.5)
     )
-    sys_lozi.plot_trajectories(
+    sys_lozi.save_data(data, 'trajectories_eps0.1_c0.npz')
+
+    data = sys_lozi.plot_trajectories(
         10000, eps=0.1, n_show=5, T_total=60, T_transient=0,
         save=True, y_lim=(-5, 1.5), component=1
     )
-    sys_lozi.plot_trajectories(
+    sys_lozi.save_data(data, 'trajectories_eps0.1_c1.npz')
+
+    data = sys_lozi.plot_trajectories(
         10000, eps=0.32, n_show=5,
         T_total=int(1e5) + 60, T_transient=int(1e5),
         save=True, y_lim=(-0.75, 1.25)
     )
-    sys_lozi.plot_trajectories(
+    sys_lozi.save_data(data, 'trajectories_eps0.32_c0.npz')
+
+    data = sys_lozi.plot_trajectories(
         10000, eps=0.32, n_show=5,
         T_total=int(1e5) + 60, T_transient=int(1e5),
         save=True, y_lim=(-0.5, 0.75), component=1
     )
-    sys_lozi.plot_trajectories(
+    sys_lozi.save_data(data, 'trajectories_eps0.32_c1.npz')
+
+    data = sys_lozi.plot_trajectories(
         10000, eps=0.5, n_show=5, T_total=60, T_transient=0,
         save=True, y_lim=(-5, 1.5)
     )
-    sys_lozi.plot_trajectories(
+    sys_lozi.save_data(data, 'trajectories_eps0.5_c0.npz')
+
+    data = sys_lozi.plot_trajectories(
         10000, eps=0.5, n_show=5, T_total=60, T_transient=0,
         save=True, y_lim=(-5, 1.5), component=1
     )
+    sys_lozi.save_data(data, 'trajectories_eps0.5_c1.npz')
 
     # ── Core statistical analyses ─────────────────────────────────────────────
-    sys_lozi.analysis_timeseries(eps=0.32, N_values=[1000, 10000, 100000, 1000000])
-    sys_lozi.analysis_fluctuation_scaling(eps=0.32, N_values=[1000, 10000, 100000, 1000000])
-    sys_lozi.analysis_distribution(eps=0.32, N_values=[1000, 10000, 100000, 1000000])
-    sys_lozi.analysis_self_consistency(eps=0.32)
+    data = sys_lozi.analysis_timeseries(eps=0.32, N_values=[1000, 10000, 100000, 1000000])
+    sys_lozi.save_data(data, 'timeseries_eps0.32.pkl')
+
+    data = sys_lozi.analysis_fluctuation_scaling(eps=0.32, N_values=[1000, 10000, 100000, 1000000])
+    sys_lozi.save_data(data, 'scaling_eps0.32.npz')
+
+    data = sys_lozi.analysis_distribution(eps=0.32, N_values=[1000, 10000, 100000, 1000000])
+    sys_lozi.save_data(data, 'distribution_eps0.32.pkl')
+
+    data = sys_lozi.analysis_self_consistency(eps=0.32)
+    sys_lozi.save_data(data, 'self_consistency_eps0.32.npz')
 
     # ── Bifurcation diagrams (x and y components) ─────────────────────────────
-    sys_lozi.bifurcation_diagram(bifurcation_param="eps", h_bar=0.218)
-    sys_lozi.bifurcation_diagram(bifurcation_param="eps", h_bar=0.218, component=1)
-    sys_lozi.bifurcation_diagram(
+    data = sys_lozi.bifurcation_diagram(bifurcation_param="eps", h_bar=0.218)
+    sys_lozi.save_data(data, 'bifurcation_eps_c0.npz')
+
+    data = sys_lozi.bifurcation_diagram(bifurcation_param="eps", h_bar=0.218, component=1)
+    sys_lozi.save_data(data, 'bifurcation_eps_c1.npz')
+
+    data = sys_lozi.bifurcation_diagram(
         bifurcation_param='map_param',
         map_factory=lambda a: CoupledMapLattice.from_lozi(a=a, b=0.5),
         param_range=(1.4, 3), eps_fixed=0.32,
         h_bar=0.218, sweep_label='a'
     )
-    sys_lozi.bifurcation_diagram(
+    sys_lozi.save_data(data, 'bifurcation_map_param_a_c0.npz')
+
+    data = sys_lozi.bifurcation_diagram(
         bifurcation_param='map_param',
         map_factory=lambda a: CoupledMapLattice.from_lozi(a=a, b=0.5),
         param_range=(1.4, 3), eps_fixed=0.32,
         h_bar=0.218, sweep_label='a', component=1
     )
+    sys_lozi.save_data(data, 'bifurcation_map_param_a_c1.npz')
 
 # ── Mean-field bifurcation (MPI-aware) ────────────────────────────────────────
-sys_lozi.analysis_meanfield_bifurcation(N=100000, n_param=2000)
+data = sys_lozi.analysis_meanfield_bifurcation(N=10000, n_param=2000)
+if rank == 0:
+    sys_lozi.save_data(data, 'meanfield_bif_eps_N10000.npz')
 
-sys_lozi.analysis_meanfield_bifurcation(
+data = sys_lozi.analysis_meanfield_bifurcation(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_lozi(a=a, b=0.5),
     param_range=(1.4, 3), eps_fixed=0.32,
-    sweep_label='a', n_param=2000, N=100000
+    sweep_label='a', n_param=2000, N=10000
 )
+if rank == 0:
+    sys_lozi.save_data(data, 'meanfield_bif_map_param_a_eps0.32_N10000.npz')
 
 # ── Minimum N to prevent escape (MPI-aware) ───────────────────────────────────
-sys_lozi.analysis_min_N_escape(
+params, N_vals = sys_lozi.analysis_min_N_escape(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_lozi(a=a, b=0.5),
     param_range=(1.4, 3),
     eps_fixed=0.32,
     n_param=1000,
-    N_max=1000000,
+    N_max=100000,
     sweep_label='a'
 )
+if rank == 0:
+    sys_lozi.save_data({'param': params, 'N_min': N_vals}, 'min_N_map_param_a_eps0.32.npz')
 
-sys_lozi.analysis_min_N_escape(
+params, N_vals = sys_lozi.analysis_min_N_escape(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_lozi(a=a, b=0.5),
     param_range=(1.4, 3),
     eps_fixed=0.2,
     n_param=1000,
-    N_max=1000000,
+    N_max=100000,
     sweep_label='a'
 )
+if rank == 0:
+    sys_lozi.save_data({'param': params, 'N_min': N_vals}, 'min_N_map_param_a_eps0.2.npz')
