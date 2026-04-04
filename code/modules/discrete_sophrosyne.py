@@ -407,7 +407,7 @@ class CoupledMapLattice:
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 1: Time series visualization
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_timeseries(self, eps, N_values=(100, 1000, 10000, 100000), T_show=200, T_transient=1000000, plot=True):
+    def analysis_timeseries(self, eps, N_values=(100, 1000, 10000, 100000), T_show=200, T_transient=100000, plot=True):
         """
         Returns
         -------
@@ -455,7 +455,7 @@ class CoupledMapLattice:
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 2: Fluctuation scaling  sigma_h  vs  N
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_fluctuation_scaling(self, eps, N_values=(100, 1000, 10000, 100000), T_show=2000, T_transient=1000000, plot=True):
+    def analysis_fluctuation_scaling(self, eps, N_values=(100, 1000, 10000, 100000), T_show=2000, T_transient=100000, plot=True):
         """
         Returns
         -------
@@ -544,7 +544,7 @@ class CoupledMapLattice:
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 3: Distribution of h_t and rescaled collapse
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_distribution(self, eps, N_values=(100, 1000, 10000, 100000), T_show=2000, T_transient=1000000, plot=True):
+    def analysis_distribution(self, eps, N_values=(100, 1000, 10000, 100000), T_show=2000, T_transient=100000, plot=True):
         """
         Returns
         -------
@@ -648,7 +648,7 @@ class CoupledMapLattice:
     # ANALYSIS 4: Self-consistency check
     # ══════════════════════════════════════════════════════════════════════
     def analysis_self_consistency(self, eps, h_range=(0.01, 0.99), N_sc=10000,
-                                  T_sc=200000, T_trans_sc=50000, T_transient=1000000, T_show=2000, plot=True):
+                                  T_sc=200000, T_trans_sc=50000, T_transient=100000, T_show=2000, plot=True):
         """
         Parameters
         ----------
