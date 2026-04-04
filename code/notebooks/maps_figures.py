@@ -75,11 +75,11 @@ if rank == 0:
     sys_tent.save_data(data, 'bifurcation_map_param_a.npz')
 
 # ── Mean-field bifurcation (MPI-aware) ────────────────────────────────────────
-data = sys_tent.analysis_meanfield_bifurcation(N=10000, n_param=2000)
+data = sys_tent.analysis_meanfield_bifurcation(N=10000, n_param=1000)
 if rank == 0:
     sys_tent.save_data(data, 'meanfield_bif_eps_N10000.npz')
 
-data = sys_tent.analysis_meanfield_bifurcation(N=5000, n_param=2000)
+data = sys_tent.analysis_meanfield_bifurcation(N=5000, n_param=1000)
 if rank == 0:
     sys_tent.save_data(data, 'meanfield_bif_eps_N5000.npz')
 
@@ -87,7 +87,7 @@ data = sys_tent.analysis_meanfield_bifurcation(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
     param_range=(2, 3.4), eps_fixed=0.5,
-    sweep_label="a", n_param=2000, N=10000
+    sweep_label="a", n_param=1000, N=10000
 )
 if rank == 0:
     sys_tent.save_data(data, 'meanfield_bif_map_param_a_eps0.5_N10000.npz')
@@ -97,10 +97,10 @@ if rank == 0:
 params, N_vals = sys_tent.analysis_min_N_escape(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
-    param_range=(2, 3.4),
+    param_range=(2, 3),
     eps_fixed=0.5,
-    n_param=1000,
-    N_max=100000,
+    n_param=300,
+    N_max=20000,
     sweep_label="a"
 )
 if rank == 0:
@@ -109,10 +109,10 @@ if rank == 0:
 params, N_vals = sys_tent.analysis_min_N_escape(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
-    param_range=(2, 3.4),
+    param_range=(2, 3),
     eps_fixed=0.4,
-    n_param=1000,
-    N_max=100000,
+    n_param=300,
+    N_max=20000,
     sweep_label="a"
 )
 if rank == 0:
@@ -182,7 +182,7 @@ if rank == 0:
     sys_tent2.save_data(data, 'bifurcation_map_param_a_hbar0.636.npz')
 
 # ── Mean-field bifurcation (MPI-aware) ────────────────────────────────────────
-data = sys_tent2.analysis_meanfield_bifurcation(N=10000, n_param=2000)
+data = sys_tent2.analysis_meanfield_bifurcation(N=10000, n_param=1000)
 if rank == 0:
     sys_tent2.save_data(data, 'meanfield_bif_eps_N10000_v2.npz')
 
@@ -190,36 +190,11 @@ data = sys_tent2.analysis_meanfield_bifurcation(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
     param_range=(2, 3.4), eps_fixed=0.5,
-    sweep_label="a", n_param=2000, N=10000
+    sweep_label="a", n_param=1000, N=10000
 )
 if rank == 0:
     sys_tent2.save_data(data, 'meanfield_bif_map_param_a_eps0.5_N10000_v2.npz')
 
-
-# ── Minimum N to prevent escape (MPI-aware) ───────────────────────────────────
-params, N_vals = sys_tent2.analysis_min_N_escape(
-    sweep='map_param',
-    map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
-    param_range=(2, 3.4),
-    eps_fixed=0.5,
-    n_param=1000,
-    N_max=100000,
-    sweep_label="a"
-)
-if rank == 0:
-    sys_tent2.save_data({'param': params, 'N_min': N_vals}, 'min_N_map_param_a_eps0.5_v2.npz')
-
-params, N_vals = sys_tent2.analysis_min_N_escape(
-    sweep='map_param',
-    map_factory=lambda a: CoupledMapLattice.from_tent(a=a),
-    param_range=(2, 3.4),
-    eps_fixed=0.4,
-    n_param=1000,
-    N_max=100000,
-    sweep_label="a"
-)
-if rank == 0:
-    sys_tent2.save_data({'param': params, 'N_min': N_vals}, 'min_N_map_param_a_eps0.4_v2.npz')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LOGISTIC MAP   r = 4.2, eps = 0.35
@@ -282,7 +257,7 @@ if rank == 0:
     sys_logistic.save_data(data, 'bifurcation_map_param_r.npz')
 
 # ── Mean-field bifurcation (MPI-aware) ────────────────────────────────────────
-data = sys_logistic.analysis_meanfield_bifurcation(N=10000, n_param=2000)
+data = sys_logistic.analysis_meanfield_bifurcation(N=10000, n_param=1000)
 if rank == 0:
     sys_logistic.save_data(data, 'meanfield_bif_eps_N10000.npz')
 
@@ -290,7 +265,7 @@ data = sys_logistic.analysis_meanfield_bifurcation(
     sweep='map_param',
     map_factory=lambda r: CoupledMapLattice.from_logistic(r=r),
     param_range=(3.0, 5.0), eps_fixed=0.35,
-    sweep_label='r', n_param=2000, N=10000
+    sweep_label='r', n_param=1000, N=10000
 )
 if rank == 0:
     sys_logistic.save_data(data, 'meanfield_bif_map_param_r_eps0.35_N10000.npz')
@@ -301,8 +276,8 @@ params, N_vals = sys_logistic.analysis_min_N_escape(
     map_factory=lambda r: CoupledMapLattice.from_logistic(r=r),
     param_range=(4, 5),
     eps_fixed=0.35,
-    n_param=1000,
-    N_max=100000,
+    n_param=300,
+    N_max=20000,
     sweep_label="r"
 )
 if rank == 0:
@@ -311,10 +286,10 @@ if rank == 0:
 params, N_vals = sys_logistic.analysis_min_N_escape(
     sweep='map_param',
     map_factory=lambda r: CoupledMapLattice.from_logistic(r=r),
-    param_range=(4, 5),
+    param_range=(4, 4.5),
     eps_fixed=0.2,
-    n_param=1000,
-    N_max=100000,
+    n_param=300,
+    N_max=20000,
     sweep_label='r'
 )
 if rank == 0:
@@ -418,7 +393,7 @@ if rank == 0:
     sys_lozi.save_data(data, 'bifurcation_map_param_a_c1.npz')
 
 # ── Mean-field bifurcation (MPI-aware) ────────────────────────────────────────
-data = sys_lozi.analysis_meanfield_bifurcation(N=10000, n_param=2000)
+data = sys_lozi.analysis_meanfield_bifurcation(N=10000, n_param=1000)
 if rank == 0:
     sys_lozi.save_data(data, 'meanfield_bif_eps_N10000.npz')
 
@@ -426,7 +401,7 @@ data = sys_lozi.analysis_meanfield_bifurcation(
     sweep='map_param',
     map_factory=lambda a: CoupledMapLattice.from_lozi(a=a, b=0.5),
     param_range=(1.4, 3), eps_fixed=0.32,
-    sweep_label='a', n_param=2000, N=10000
+    sweep_label='a', n_param=1000, N=10000
 )
 if rank == 0:
     sys_lozi.save_data(data, 'meanfield_bif_map_param_a_eps0.32_N10000.npz')
@@ -437,8 +412,8 @@ params, N_vals = sys_lozi.analysis_min_N_escape(
     map_factory=lambda a: CoupledMapLattice.from_lozi(a=a, b=0.5),
     param_range=(1.4, 3),
     eps_fixed=0.32,
-    n_param=1000,
-    N_max=100000,
+    n_param=300,
+    N_max=20000,
     sweep_label='a'
 )
 if rank == 0:
@@ -449,8 +424,8 @@ params, N_vals = sys_lozi.analysis_min_N_escape(
     map_factory=lambda a: CoupledMapLattice.from_lozi(a=a, b=0.5),
     param_range=(1.4, 3),
     eps_fixed=0.2,
-    n_param=1000,
-    N_max=100000,
+    n_param=300,
+    N_max=20000,
     sweep_label='a'
 )
 if rank == 0:

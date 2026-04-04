@@ -32,18 +32,21 @@ matplotlib.use('Agg')   # non-interactive backend — no windows, safe on cluste
 
 from modules.discrete_sophrosyne import CoupledMapLattice, tent
 
+# ── all output goes next to this script ───────────────────────────────────────
+HERE        = Path(__file__).resolve().parent
+
 # ── benchmark parameters (keep small so each run is fast) ─────────────────────
 EPS_VALUES  = np.arange(0.01, 0.5,  0.04)   # 13 values  — phase diagram
 N_VALUES    = (100, 1000, 10000)             # 3 sizes    — phase diagram
-PARAM_RANGE = (2, 3.4)                   # map param sweep — min_N
-N_PARAM     = 20                            # points along the sweep — min_N
+PARAM_RANGE = (2, 3.4)                       # map param sweep — min_N
+N_PARAM     = 20                             # points along the sweep — min_N
 EPS_FIXED   = 0.1
-RESULTS_CSV = "../../outputs/benchmark_results.csv"
+RESULTS_CSV = HERE / "benchmark_results.csv"
 
 
 def make_system():
     return CoupledMapLattice(
-        lambda x: tent(x, a=1.99), name="tent_benchmark", output_dir="../../outputs/tent_benchmark"
+        lambda x: tent(x, a=1.99), name="tent_benchmark", output_dir=str(HERE / "tent_benchmark")
     )
 
 
@@ -93,8 +96,7 @@ def run_benchmark():
 
     # only rank 0 writes results
     if rank == 0:
-        csv_path = Path(RESULTS_CSV)
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        csv_path = RESULTS_CSV
         header = not csv_path.exists()
         with open(csv_path, 'a') as f:
             if header:
@@ -114,7 +116,7 @@ def plot_scaling():
     import matplotlib.pyplot as plt
     import csv
 
-    csv_path = Path(RESULTS_CSV)
+    csv_path = RESULTS_CSV
     if not csv_path.exists():
         print(f"No results file found at {csv_path}")
         return
@@ -152,7 +154,7 @@ def plot_scaling():
 
     plt.suptitle('MPI Scaling — discrete_sophrosyne', fontsize=12)
     plt.tight_layout()
-    out = Path(RESULTS_CSV).parent / "benchmark_scaling.png"
+    out = HERE / "benchmark_scaling.png"
     plt.savefig(out, dpi=150, bbox_inches='tight')
     print(f"Saved {out}")
 
