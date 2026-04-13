@@ -24,34 +24,32 @@ OUT = "../../outputs/papers_figures"
 # ══════════════════════════════════════════════════════════════════════════════
 # LINZ-SPROTT  (continuous)
 # ══════════════════════════════════════════════════════════════════════════════
-# Note: EscapeMapAnalyzer uses mp.Pool internally — run on a single MPI rank.
+# EscapeMapAnalyzer is MPI-aware — all ranks participate in computation.
 
 LINZ_OUT = f"{OUT}/linz"
-os.makedirs(LINZ_OUT, exist_ok=True)
+os.makedirs(LINZ_OUT, exist_ok=True) if rank == 0 else None
 
-if rank == 0:
+analyzer = EscapeMapAnalyzer(
+    system_cls  = LinzSprott,
+    base_params = {},
+    epsilon     = 0.0,          # fixed; swept as param2
+    dt          = 0.05,
+    steps       = 50_000,
+    window      = 5_000,
+    threshold   = 100.0,
+    n_jobs      = os.cpu_count() or 1,
+)
 
-    # ── Escape map: min N to prevent escape, sweep a × epsilon ───────────────
-    analyzer = EscapeMapAnalyzer(
-        system_cls  = LinzSprott,
-        base_params = {},
-        epsilon     = 0.0,          # fixed; swept as param2
-        dt          = 0.005,
-        steps       = 50_000,
-        window      = 5_000,
-        threshold   = 100.0,
-        n_jobs      = -1,
-    )
-
-    result_min_N = analyzer.compute_min_N(
-        param1_name   = "a",
-        param1_values = np.linspace(0.3, 0.8, 60),
-        param2_name   = "epsilon",
-        param2_values = np.linspace(0.0, 0.15, 60),
-        N_min         = 1,
-        N_max         = 500,
-        n_trials      = 3,
-    )
+result_min_N = analyzer.compute_min_N(
+    param1_name   = "a",
+    param1_values = np.linspace(0.4, 0.6, 100),
+    param2_name   = "epsilon",
+    param2_values = np.linspace(0.0, 1, 100),
+    N_min         = 1,
+    N_max         = 10000,
+    n_trials      = 3,
+)
+if rank == 0 and result_min_N is not None:
     EscapeMapPlotter.plot_min_N(
         result_min_N,
         output = f"{LINZ_OUT}/escape_map_min_N.png",
@@ -64,40 +62,42 @@ if rank == 0:
         min_N      = result_min_N.min_N,
     )
 
-    # ── Fixed-N escape map: colour by escape time ─────────────────────────────
-    result_fixed = analyzer.compute(
-        param1_name   = "a",
-        param1_values = np.linspace(0.3, 0.8, 80),
-        param2_name   = "epsilon",
-        param2_values = np.linspace(0.0, 0.15, 80),
-        seed          = 42,
-    )
+# ── Fixed-N escape map: colour by escape time ─────────────────────────────
+result_fixed = analyzer.compute(
+    param1_name   = "a",
+    param1_values = np.linspace(0.4, 0.6, 100),
+    param2_name   = "epsilon",
+    param2_values = np.linspace(0.0, 1, 100),
+    seed          = 42,
+)
+if rank == 0 and result_fixed is not None:
     EscapeMapPlotter.plot(
         result_fixed,
         output = f"{LINZ_OUT}/escape_map_fixed_N.png",
         cmap   = "viridis",
     )
 
-    # ── Histograms at a representative bounded point ──────────────────────────
+# ── Histograms at a representative bounded point ──────────────────────────
+if rank == 0:
     runner = SimulationRunner(
-        system_cls   = LinzSprott,
-        system_params = {"a": 0.54},
-        N            = 100,
-        epsilon      = 0.01,
-        dt           = 0.005,
-        steps        = 200_000,
-        window       = 10_000,
-        verbose      = False,
+        system_cls    = LinzSprott,
+        system_params = {"a": 0.53},
+        N             = 100,
+        epsilon       = 0.1,
+        dt            = 0.05,
+        steps         = 200_000,
+        window        = 10_000,
+        verbose       = False,
     )
     sim = runner.run()
     HistogramPlotter.plot(
         sim,
-        output       = f"{LINZ_OUT}/histograms_a0.54_eps0.01.png",
+        output       = f"{LINZ_OUT}/histograms_a0.53_eps0.1.png",
         gaussian_fit = True,
     )
     HistogramPlotter.plot(
         sim,
-        output       = f"{LINZ_OUT}/histograms_a0.54_eps0.01_nofit.png",
+        output       = f"{LINZ_OUT}/histograms_a0.53_eps0.1_nofit.png",
         gaussian_fit = False,
     )
     print(f"Linz-Sprott done → {LINZ_OUT}")
@@ -110,14 +110,14 @@ if rank == 0:
 TENT_OUT = f"{OUT}/tent_escape"
 os.makedirs(TENT_OUT, exist_ok=True) if rank == 0 else None
 
-sys_tent = CoupledMapLattice.from_tent(a=1.99, output_dir=TENT_OUT)
+sys_tent = CoupledMapLattice.from_tent(a=3, output_dir=TENT_OUT)
 
 result_tent = sys_tent.analysis_escape_phase_diagram(
     map_factory = lambda a: CoupledMapLattice.from_tent(a=a),
-    a_range     = (1.0, 3.0),
-    eps_range   = (0.0, 0.6),
-    n_a         = 80,
-    n_eps       = 80,
+    a_range     = (2.0, 4.0),
+    eps_range   = (0.0, 1),
+    n_a         = 100,
+    n_eps       = 100,
     N_min       = 1,
     N_max       = 20_000,
     T_total     = 4_000,
@@ -134,12 +134,13 @@ if rank == 0 and result_tent is not None:
 
     # ── Element histogram ─────────────────────────────────────────────────────
     sys_tent.analysis_element_histogram(
-        N           = 10_000,
-        eps         = 0.3,
-        T_total     = 200_000,
-        T_transient = 100_000,
-        output      = f"{TENT_OUT}/histogram_N10000_eps0.3.png",
-        show        = False,
+        N            = 1000,
+        eps          = 0.3,
+        T_total      = 200_000,
+        T_transient  = 100_000,
+        output       = f"{TENT_OUT}/histogram_N10000_eps0.3.png",
+        show         = False,
+        gaussian_fit = False,
     )
     print(f"Tent done → {TENT_OUT}")
 
@@ -151,15 +152,15 @@ if rank == 0 and result_tent is not None:
 LOZI_OUT = f"{OUT}/lozi_escape"
 os.makedirs(LOZI_OUT, exist_ok=True) if rank == 0 else None
 
-sys_lozi = CoupledMapLattice.from_lozi(a=1.7, b=0.5, output_dir=LOZI_OUT)
+sys_lozi = CoupledMapLattice.from_lozi(a=2, b=0.5, output_dir=LOZI_OUT)
 
 # ── Escape map: sweep a (b fixed) ────────────────────────────────────────────
 result_lozi_a = sys_lozi.analysis_escape_phase_diagram(
     map_factory = lambda a: CoupledMapLattice.from_lozi(a=a, b=0.5),
-    a_range     = (1.0, 2.5),
-    eps_range   = (0.0, 0.6),
-    n_a         = 80,
-    n_eps       = 80,
+    a_range     = (1.75, 4),
+    eps_range   = (0.0, 1),
+    n_a         = 100,
+    n_eps       = 100,
     N_min       = 1,
     N_max       = 20_000,
     T_total     = 4_000,
@@ -176,11 +177,11 @@ if rank == 0 and result_lozi_a is not None:
 
 # ── Escape map: sweep b (a fixed) ────────────────────────────────────────────
 result_lozi_b = sys_lozi.analysis_escape_phase_diagram(
-    map_factory = lambda b: CoupledMapLattice.from_lozi(a=1.7, b=b),
-    a_range     = (0.1, 0.9),
-    eps_range   = (0.0, 0.6),
-    n_a         = 80,
-    n_eps       = 80,
+    map_factory = lambda b: CoupledMapLattice.from_lozi(a=1.8, b=b),
+    a_range     = (0.3, 0.9),
+    eps_range   = (0.0, 1),
+    n_a         = 100,
+    n_eps       = 100,
     N_min       = 1,
     N_max       = 20_000,
     T_total     = 4_000,
@@ -198,10 +199,10 @@ if rank == 0 and result_lozi_b is not None:
     # ── Element histogram (x and y panels) ───────────────────────────────────
     sys_lozi.analysis_element_histogram(
         N           = 10_000,
-        eps         = 0.32,
+        eps         = 0.25,
         T_total     = 200_000,
         T_transient = 100_000,
-        output      = f"{LOZI_OUT}/histogram_N10000_eps0.32.png",
+        output      = f"{LOZI_OUT}/histogram_N10000_eps0.25.png",
         show        = False,
     )
     print(f"Lozi done → {LOZI_OUT}")

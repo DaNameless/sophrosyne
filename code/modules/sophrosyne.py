@@ -2212,7 +2212,7 @@ class EscapeMapAnalyzer:
         self.steps       = steps
         self.window      = window
         self.threshold   = threshold
-        self.n_jobs      = n_jobs or os.cpu_count() or 1
+        self.n_jobs      = os.cpu_count() or 1 if (n_jobs is None or n_jobs < 1) else n_jobs
 
     def _build_params(self, p1, p1_name, p2, p2_name):
         """Resolve (p1, p2) into (system_params dict, epsilon float)."""
@@ -2228,6 +2228,41 @@ class EscapeMapAnalyzer:
             params[p2_name] = float(p2)
         return params, epsilon
 
+    @staticmethod
+    def _mpi():
+        """Return (comm, rank, size). Falls back to (None, 0, 1) without mpi4py."""
+        try:
+            from mpi4py import MPI
+            comm = MPI.COMM_WORLD
+            return comm, comm.Get_rank(), comm.Get_size()
+        except ImportError:
+            return None, 0, 1
+
+    def _run_tasks(self, tasks, worker, verbose, label):
+        """Distribute tasks via MPI (if available) or mp.Pool."""
+        comm, rank, size = self._mpi()
+        t0 = time.time()
+
+        if size > 1:    # ── MPI ──────────────────────────────────────────────
+            if rank == 0 and verbose:
+                print(f"{label}: {len(tasks)} points on {size} MPI ranks …")
+            my_indices = range(rank, len(tasks), size)
+            my_results = [(k, worker(tasks[k])) for k in my_indices]
+            gathered   = comm.gather(my_results, root=0)
+            if rank != 0:
+                return None
+            flat = sorted([r for sub in gathered for r in sub], key=lambda x: x[0])
+            raw  = [r for _, r in flat]
+        else:           # ── mp.Pool ──────────────────────────────────────────
+            if verbose:
+                print(f"{label}: {len(tasks)} points on {self.n_jobs} workers …")
+            with mp.Pool(processes=self.n_jobs) as pool:
+                raw = pool.map(worker, tasks)
+
+        if verbose and (size == 1 or (size > 1 and comm.Get_rank() == 0)):
+            print(f"Done in {time.time() - t0:.1f} s")
+        return raw
+
     def compute(
         self,
         param1_name:   str,
@@ -2236,10 +2271,11 @@ class EscapeMapAnalyzer:
         param2_values: Optional[np.ndarray] = None,
         seed:          int = 42,
         verbose:       bool = True,
-    ) -> EscapeMapResult:
+    ):
         """
         Fixed-N sweep: detect whether the system escapes at each (p1, p2) point.
         Coloured by escape time; grey where bounded.
+        Returns None on non-root MPI ranks.
         """
         param1_values = np.asarray(param1_values)
         param2_values = np.asarray(
@@ -2247,38 +2283,24 @@ class EscapeMapAnalyzer:
             else np.linspace(0.0, 0.5, 40)
         )
 
-        tasks = [
-            (*self._build_params(p1, param1_name, p2, param2_name),
-             self.dt, self.steps, self.window, self.threshold, seed)
-            for p2 in param2_values
-            for p1 in param1_values
-        ]
-        # prepend system_cls and N
-        tasks = [
-            (self.system_cls, t[0], self.N, t[1], *t[2:])
-            for t in tasks
-        ]
+        tasks = []
+        for p2 in param2_values:
+            for p1 in param1_values:
+                params, epsilon = self._build_params(p1, param1_name, p2, param2_name)
+                tasks.append((self.system_cls, params, self.N, epsilon,
+                               self.dt, self.steps, self.window, self.threshold, seed))
 
-        if verbose:
-            print(f"Escape map (fixed N={self.N}): "
-                  f"{len(param1_values)}×{len(param2_values)} = {len(tasks)} points "
-                  f"on {self.n_jobs} workers …")
-
-        t0 = time.time()
-        with mp.Pool(processes=self.n_jobs) as pool:
-            raw = pool.map(_escape_map_worker, tasks)
-        if verbose:
-            print(f"Done in {time.time() - t0:.1f} s")
+        raw = self._run_tasks(tasks, _escape_map_worker, verbose,
+                              f"Escape map (fixed N={self.N})")
+        if raw is None:
+            return None
 
         n1, n2 = len(param1_values), len(param2_values)
-        escaped     = np.array([r[0] for r in raw], dtype=bool).reshape(n2, n1)
-        escape_time = np.array([r[1] for r in raw], dtype=float).reshape(n2, n1)
-
         return EscapeMapResult(
             param1_values=param1_values,
             param2_values=param2_values,
-            escaped=escaped,
-            escape_time=escape_time,
+            escaped    =np.array([r[0] for r in raw], dtype=bool).reshape(n2, n1),
+            escape_time=np.array([r[1] for r in raw], dtype=float).reshape(n2, n1),
             param1_name=param1_name,
             param2_name=param2_name,
         )
@@ -2294,13 +2316,11 @@ class EscapeMapAnalyzer:
         n_trials:      int = 3,
         seed:          int = 42,
         verbose:       bool = True,
-    ) -> EscapeMinNResult:
+    ):
         """
         Min-N sweep: for each (p1, p2) find the smallest N that keeps the
         system bounded.  Coloured by log₁₀(N_c); grey where always-escaping.
-
-        A point is considered "escaping at N" if any of the n_trials
-        independent runs (different seeds) escape.
+        Returns None on non-root MPI ranks.
         """
         param1_values = np.asarray(param1_values)
         param2_values = np.asarray(
@@ -2318,27 +2338,19 @@ class EscapeMapAnalyzer:
                     N_min, N_max, n_trials, seed,
                 ))
 
-        if verbose:
-            print(f"Escape map (min-N): "
-                  f"{len(param1_values)}×{len(param2_values)} = {len(tasks)} points, "
-                  f"N_max={N_max}, n_trials={n_trials}, workers={self.n_jobs} …")
-
-        t0 = time.time()
-        with mp.Pool(processes=self.n_jobs) as pool:
-            raw = pool.map(_escape_min_N_worker, tasks)
-        if verbose:
-            print(f"Done in {time.time() - t0:.1f} s")
+        raw = self._run_tasks(tasks, _escape_min_N_worker, verbose,
+                              f"Escape map (min-N, N_max={N_max})")
+        if raw is None:
+            return None
 
         n1, n2 = len(param1_values), len(param2_values)
-        min_N = np.array(raw, dtype=float).reshape(n2, n1)
-
         return EscapeMinNResult(
             param1_values=param1_values,
             param2_values=param2_values,
-            min_N=min_N,
+            min_N      =np.array(raw, dtype=float).reshape(n2, n1),
             param1_name=param1_name,
             param2_name=param2_name,
-            N_max=N_max,
+            N_max      =N_max,
         )
 
 

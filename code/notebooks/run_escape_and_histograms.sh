@@ -1,18 +1,15 @@
 #!/bin/bash
-set -euo pipefail
+#SBATCH --partition=LocalQ
+#SBATCH --ntasks=16
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=40G
+#SBATCH --time=48:00:00
+#SBATCH --output=/home/gisc1/rssg/sophrosyne/paper_figures/escape_%j.out
+#SBATCH --error=/home/gisc1/rssg/sophrosyne/paper_figures/escape_%j.err
+#SBATCH --chdir=/home/gisc1/rssg/sophrosyne/paper_figures/
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON="$HOME/miniforge3/envs/dynsys-mpi/bin/python"
-N_CORES="${1:-16}"
+set -e
 
-echo "========================================"
-echo "  Escape Maps + Histograms — $(date)"
-echo "  cores : $N_CORES"
-echo "  script: $SCRIPT_DIR/escape_and_histograms.py"
-echo "========================================"
+PYTHON=$(which python)
 
-mpirun -n "$N_CORES" "$PYTHON" "$SCRIPT_DIR/escape_and_histograms.py"
-
-echo "========================================"
-echo "  Done — $(date)"
-echo "========================================"
+mpirun -n 16 $PYTHON escape_and_histograms.py
