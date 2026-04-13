@@ -131,6 +131,69 @@ class DynamicalSystem(ABC):
         return f"{self.name}(ε={self.epsilon}, {param_str})"
 
 
+class ForcedSystem(DynamicalSystem):
+    """
+    Wraps any DynamicalSystem and adds a constant forcing h to one component:
+
+        d(component)/dt  +=  h
+
+    The wrapped system is otherwise unchanged, so ForcedSystem works anywhere
+    a plain DynamicalSystem is accepted (SimulationRunner, BifurcationAnalyzer,
+    EscapeMapAnalyzer, Plotter, …).
+
+    Parameters
+    ----------
+    inner_cls : DynamicalSystem subclass to wrap (keyword arg for pickling)
+    h         : forcing amplitude (constant)
+    component : index of the component that receives the forcing (default 0)
+    **kwargs  : passed directly to inner_cls (e.g. a=0.5, epsilon=0.01)
+
+    Examples
+    --------
+    # Direct use (SimulationRunner, Plotter — no multiprocessing):
+    sys = ForcedSystem(LinzSprott, h=0.3, component=0, a=0.5)
+
+    # Parallel use (BifurcationAnalyzer, EscapeMapAnalyzer — mp.Pool):
+    # Pass ForcedSystem as system_cls and inner_cls via base_params so
+    # everything is picklable (no lambdas).
+    bif = BifurcationAnalyzer(
+        ForcedSystem,
+        base_params={"inner_cls": LinzSprott, "a": 0.5, "component": 0},
+    )
+    result = bif.compute("h", np.linspace(-1.0, 1.0, 300))
+    """
+
+    def __init__(self, inner_cls: Type[DynamicalSystem] = None,
+                 h: float = 0.0, component: int = 0, **kwargs):
+        self._inner    = inner_cls(**kwargs)
+        self._h        = h
+        self._comp     = component
+        super().__init__(epsilon=self._inner.epsilon)
+        self._params   = {"inner_cls": inner_cls, "h": h,
+                          "component": component, **self._inner._params}
+
+    def slope(self, t, s, means):
+        dydt = self._inner.slope(t, s, means).copy()
+        dydt[:, self._comp] += self._h
+        return dydt
+
+    @property
+    def dim(self) -> int:
+        return self._inner.dim
+
+    @property
+    def default_ic(self) -> np.ndarray:
+        return self._inner.default_ic
+
+    @property
+    def name(self) -> str:
+        return f"Forced({self._inner.name}, h={self._h}, comp={self._comp})"
+
+    @property
+    def labels(self) -> List[str]:
+        return self._inner.labels
+
+
 class LinzSprott(DynamicalSystem):
     """
     Coupled Linz-Sprott jerk system.
@@ -1732,7 +1795,8 @@ def _bif_worker(args: tuple) -> dict:
     All components extracted from the same trajectory.
     Integration is terminated early if the trajectory escapes (|y| > threshold).
     """
-    system_cls, params, ic, t_transient, t_steady, dt, peak_keep, peak_distance, threshold = args
+    (system_cls, params, ic, t_transient, t_steady, dt,
+     peak_keep, peak_distance, threshold) = args
 
     system = system_cls(**params)
     dim    = system.dim
@@ -1749,8 +1813,8 @@ def _bif_worker(args: tuple) -> dict:
 
     def escape_event(t, y):
         return threshold - np.max(np.abs(y))
-    escape_event.terminal  = True   # stop integration on trigger
-    escape_event.direction = -1     # only trigger when crossing downward (i.e. |y| growing past threshold)
+    escape_event.terminal  = True
+    escape_event.direction = -1
 
     out = {
         "peaks": {lab: np.empty(0) for lab in labels},
@@ -1892,19 +1956,19 @@ class BifurcationAnalyzer:
         oscillator_index: int = 0,
         n_jobs: Optional[int] = None,
     ):
-        self.system_cls       = system_cls
-        self.base_params      = base_params or {}
-        self.N                = N
-        self.epsilon          = epsilon
-        self.t_transient      = t_transient
-        self.t_steady         = t_steady
-        self.dt               = dt
-        self.peak_keep        = peak_keep
-        self.peak_distance    = max(1, int(min_peak_period / dt))
-        self.threshold        = threshold
-        self.variable         = variable
-        self.oscillator_index = oscillator_index
-        self.n_jobs           = n_jobs or os.cpu_count() or 1
+        self.system_cls        = system_cls
+        self.base_params       = base_params or {}
+        self.N                 = N
+        self.epsilon           = epsilon
+        self.t_transient       = t_transient
+        self.t_steady          = t_steady
+        self.dt                = dt
+        self.peak_keep         = peak_keep
+        self.peak_distance     = max(1, int(min_peak_period / dt))
+        self.threshold         = threshold
+        self.variable          = variable
+        self.oscillator_index  = oscillator_index
+        self.n_jobs            = n_jobs or os.cpu_count() or 1
 
         # Coupled mode: convert real time to step counts for SimulationRunner
         self._steps  = int((t_transient + t_steady) / dt)
@@ -2470,22 +2534,38 @@ class HistogramPlotter:
     """
 
     @staticmethod
+    def _gauss_overlay(ax, data, color="black", ls="--", lw=1.2):
+        data = data[np.isfinite(data)]
+        if data.size == 0:
+            return
+        mu, sigma = data.mean(), data.std()
+        x = np.linspace(data.min(), data.max(), 300)
+        ax.plot(x, np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+                / (sigma * np.sqrt(2 * np.pi)),
+                color=color, linewidth=lw, ls=ls,
+                label=rf"$\mathcal{{N}}({mu:.2f},\,{sigma:.2f}^2)$")
+
+    @staticmethod
     def plot(
-        result:      "SimulationResult",
-        output:      Optional[str] = None,
-        show:        bool  = False,
-        bins:        int   = 60,
-        gaussian_fit: bool = True,
-        title:       Optional[str] = None,
+        result:          "SimulationResult",
+        output:          Optional[str] = None,
+        show:            bool = False,
+        bins:            int  = 60,
+        gaussian_fit:    Optional[str] = None,
+        plot_elements:   bool = True,
+        plot_mean_field: bool = False,
+        title:           Optional[str] = None,
     ) -> None:
         """
         Parameters
         ----------
-        result       : SimulationResult from SimulationRunner.run()
-        bins         : number of histogram bins
-        gaussian_fit : overlay a Gaussian with the same mean and std
-        output       : save path; skipped if None
-        show         : display interactively
+        result          : SimulationResult from SimulationRunner.run()
+        bins            : number of histogram bins
+        gaussian_fit    : fit Gaussian to 'elements', 'mean', 'both', or None
+        plot_elements   : plot individual-oscillator distribution (pooled over N and time)
+        plot_mean_field : overlay mean-field h_t = mean_i(x_i) distribution
+        output          : save path; skipped if None
+        show            : display interactively
         """
         tail   = result.tail          # (window, N, dim)
         labels = result.system.labels
@@ -2497,20 +2577,30 @@ class HistogramPlotter:
         if dim == 1:
             axes = [axes]
 
+        fit_elements = gaussian_fit in ("elements", "both")
+        fit_mean     = gaussian_fit in ("mean", "both")
+
         for idx, (ax, lab) in enumerate(zip(axes, labels)):
-            data = tail[:, :, idx].ravel()   # pool time × oscillators
+            data = tail[:, :, idx].ravel()        # (window*N,) — all elements
+            mf   = tail[:, :, idx].mean(axis=1)  # (window,)   — mean field
 
-            ax.hist(data, bins=bins, density=True,
-                    color=colors[idx % len(colors)], alpha=0.7,
-                    edgecolor="white", linewidth=0.3)
+            if plot_elements:
+                ax.hist(data, bins=bins, density=True,
+                        color=colors[idx % len(colors)], alpha=0.7,
+                        edgecolor="white", linewidth=0.3,
+                        label="Elements")
+            if fit_elements and plot_elements:
+                HistogramPlotter._gauss_overlay(ax, data)
 
-            if gaussian_fit:
-                mu, sigma = data.mean(), data.std()
-                x = np.linspace(data.min(), data.max(), 300)
-                ax.plot(x, np.exp(-0.5 * ((x - mu) / sigma) ** 2)
-                        / (sigma * np.sqrt(2 * np.pi)),
-                        color="black", linewidth=1.2,
-                        label=rf"$\mathcal{{N}}({mu:.2f},\,{sigma:.2f}^2)$")
+            if plot_mean_field:
+                ax.hist(mf, bins=bins, density=True,
+                        color="black", alpha=0.9,
+                        histtype="step", linewidth=1.0,
+                        label=r"$h_t$ (mean field)")
+            if fit_mean and plot_mean_field:
+                HistogramPlotter._gauss_overlay(ax, mf, color="gray", ls=":")
+
+            if plot_elements or plot_mean_field or gaussian_fit:
                 ax.legend(fontsize=8)
 
             ax.set_xlabel(rf"${lab}$", fontsize=12)

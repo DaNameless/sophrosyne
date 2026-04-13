@@ -1446,7 +1446,9 @@ class CoupledMapLattice:
         T_total=200_000,
         T_transient=100_000,
         bins=60,
-        gaussian_fit=True,
+        gaussian_fit=None,
+        plot_elements=True,
+        plot_mean_field=True,
         seed=None,
         output=None,
         show=True,
@@ -1512,6 +1514,9 @@ class CoupledMapLattice:
         n_comp      = len(components)
         comp_labels = ['x', 'y', 'z'][:n_comp]
 
+        # Filter h_series to finite values only
+        h_finite = h_series[np.isfinite(h_series)]
+
         _apply_style()
         fig, axes = plt.subplots(
             1, n_comp,
@@ -1522,22 +1527,38 @@ class CoupledMapLattice:
             axes = [axes]
 
         for ax, data, lab in zip(axes, components, comp_labels):
-            ax.hist(data, bins=bins, density=True,
-                    color=_color(0), alpha=0.75,
-                    edgecolor='white', linewidth=0.3,
-                    label='Elements')
+            data = data[np.isfinite(data)]
+            if data.size == 0:
+                ax.set_title(rf'${lab}$ — all escaped')
+                continue
 
-            ax.hist(h_series, bins=bins, density=True,
-                    color=_color(1), alpha=0.9,
-                    histtype='step', linewidth=1.0,
-                    label=r'$h_t$ (mean field)')
+            fit_elements = gaussian_fit in ('elements', 'both')
+            fit_mean     = gaussian_fit in ('mean', 'both')
 
-            if gaussian_fit:
+            if plot_elements:
+                ax.hist(data, bins=bins, density=True,
+                        color=_color(0), alpha=0.75,
+                        edgecolor='white', linewidth=0.3,
+                        label='Elements')
+            if fit_elements and plot_elements:
                 mu, sigma = data.mean(), data.std()
-                x     = np.linspace(data.min(), data.max(), 300)
-                gauss = (np.exp(-0.5 * ((x - mu) / sigma) ** 2)
-                         / (sigma * np.sqrt(2 * np.pi)))
-                ax.plot(x, gauss, color='black', linewidth=0.9, ls='--',
+                x = np.linspace(data.min(), data.max(), 300)
+                ax.plot(x, np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+                        / (sigma * np.sqrt(2 * np.pi)),
+                        color='black', linewidth=0.9, ls='--',
+                        label=rf'$\mathcal{{N}}({mu:.2f},\,{sigma:.2f}^2)$')
+
+            if plot_mean_field and h_finite.size > 0:
+                ax.hist(h_finite, bins=bins, density=True,
+                        color=_color(1), alpha=0.9,
+                        histtype='step', linewidth=1.0,
+                        label=r'$h_t$ (mean field)')
+            if fit_mean and plot_mean_field and h_finite.size > 0:
+                mu, sigma = h_finite.mean(), h_finite.std()
+                x = np.linspace(h_finite.min(), h_finite.max(), 300)
+                ax.plot(x, np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+                        / (sigma * np.sqrt(2 * np.pi)),
+                        color='gray', linewidth=0.9, ls=':',
                         label=rf'$\mathcal{{N}}({mu:.2f},\,{sigma:.2f}^2)$')
 
             ax.set_xlabel(rf'${lab}$')
