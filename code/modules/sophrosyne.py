@@ -2077,5 +2077,447 @@ class BifurcationPlotter:
         if not show:
             plt.close(fig)
 
+# ════════════════════════════════════════
+# 13. Escape Map
+# ════════════════════════════════════════
+
+def _escape_map_worker(args: tuple) -> tuple:
+    """
+    Fixed-N worker: run one (params, epsilon, N) point.
+    Returns (escaped: bool, escape_time in time units — nan if bounded).
+    """
+    system_cls, params, N, epsilon, dt, steps, window, threshold, seed = args
+    try:
+        runner = SimulationRunner(
+            system_cls=system_cls,
+            system_params=params,
+            N=N, epsilon=epsilon,
+            dt=dt, steps=steps, window=window,
+            threshold=threshold, seed=seed,
+            verbose=False,
+        )
+        result   = runner.run()
+        escaped  = result.escape.escaped
+        esc_time = float(result.escape.step * dt) if escaped else np.nan
+    except Exception:
+        escaped, esc_time = False, np.nan
+    return escaped, esc_time
+
+
+def _escape_min_N_worker(args: tuple) -> float:
+    """
+    Min-N worker: binary-search the smallest N for which the system stays
+    bounded.  Returns N_c as float, or np.nan if even N_max escapes.
+
+    A point is considered "escaping at N" if ANY of the n_trials runs
+    with that N escapes (same convention as the discrete case).
+    """
+    (system_cls, params, epsilon,
+     dt, steps, window, threshold,
+     N_min, N_max, n_trials, seed) = args
+
+    def _escapes(N: int) -> bool:
+        for trial in range(n_trials):
+            try:
+                runner = SimulationRunner(
+                    system_cls=system_cls,
+                    system_params=params,
+                    N=N, epsilon=epsilon,
+                    dt=dt, steps=steps, window=window,
+                    threshold=threshold, seed=seed + trial,
+                    verbose=False,
+                )
+                if runner.run().escape.escaped:
+                    return True
+            except Exception:
+                return True
+        return False
+
+    if not _escapes(N_min):
+        return float(N_min)
+    if _escapes(N_max):
+        return np.nan          # always escapes
+
+    lo, hi = N_min, N_max
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if _escapes(mid):
+            lo = mid
+        else:
+            hi = mid
+    return float(hi)
+
+
+@dataclass
+class EscapeMapResult:
+    """Result from a fixed-N escape sweep."""
+    param1_values: np.ndarray   # x-axis (n_p1,)
+    param2_values: np.ndarray   # y-axis (n_p2,)
+    escaped:       np.ndarray   # bool   (n_p2, n_p1)
+    escape_time:   np.ndarray   # float  (n_p2, n_p1), nan where bounded
+    param1_name:   str
+    param2_name:   str
+
+
+@dataclass
+class EscapeMinNResult:
+    """Result from a min-N escape sweep."""
+    param1_values: np.ndarray   # x-axis (n_p1,)
+    param2_values: np.ndarray   # y-axis (n_p2,)
+    min_N:         np.ndarray   # float  (n_p2, n_p1), nan where always-escaping
+    param1_name:   str
+    param2_name:   str
+    N_max:         int
+
+
+class EscapeMapAnalyzer:
+    """
+    Sweep two parameters on a 2-D grid and either:
+      - record escape/no-escape for a fixed N  (compute)
+      - find the minimum N that prevents escape (compute_min_N)
+
+    One swept parameter can be "epsilon"; it routes to SimulationRunner
+    directly. All others go to system_params.
+
+    Parameters
+    ----------
+    system_cls  : DynamicalSystem subclass
+    base_params : fixed system parameters (do not include swept params)
+    N           : number of oscillators used in compute() (ignored in compute_min_N)
+    epsilon     : coupling strength (fixed unless swept)
+    dt          : integration time step
+    steps       : total integration steps per trial
+    window      : rolling tail window (steps)
+    threshold   : escape detection threshold
+    n_jobs      : parallel workers; None → os.cpu_count()
+    """
+
+    def __init__(
+        self,
+        system_cls:  Type[DynamicalSystem],
+        base_params: Optional[Dict[str, Any]] = None,
+        N:           int   = 50,
+        epsilon:     float = 0.0,
+        dt:          float = 0.005,
+        steps:       int   = 100_000,
+        window:      int   = 5_000,
+        threshold:   float = 100.0,
+        n_jobs:      Optional[int] = None,
+    ):
+        self.system_cls  = system_cls
+        self.base_params = base_params or {}
+        self.N           = N
+        self.epsilon     = epsilon
+        self.dt          = dt
+        self.steps       = steps
+        self.window      = window
+        self.threshold   = threshold
+        self.n_jobs      = n_jobs or os.cpu_count() or 1
+
+    def _build_params(self, p1, p1_name, p2, p2_name):
+        """Resolve (p1, p2) into (system_params dict, epsilon float)."""
+        params  = dict(self.base_params)
+        epsilon = self.epsilon
+        if p1_name == "epsilon":
+            epsilon = float(p1)
+        else:
+            params[p1_name] = float(p1)
+        if p2_name == "epsilon":
+            epsilon = float(p2)
+        else:
+            params[p2_name] = float(p2)
+        return params, epsilon
+
+    def compute(
+        self,
+        param1_name:   str,
+        param1_values: np.ndarray,
+        param2_name:   str = "epsilon",
+        param2_values: Optional[np.ndarray] = None,
+        seed:          int = 42,
+        verbose:       bool = True,
+    ) -> EscapeMapResult:
+        """
+        Fixed-N sweep: detect whether the system escapes at each (p1, p2) point.
+        Coloured by escape time; grey where bounded.
+        """
+        param1_values = np.asarray(param1_values)
+        param2_values = np.asarray(
+            param2_values if param2_values is not None
+            else np.linspace(0.0, 0.5, 40)
+        )
+
+        tasks = [
+            (*self._build_params(p1, param1_name, p2, param2_name),
+             self.dt, self.steps, self.window, self.threshold, seed)
+            for p2 in param2_values
+            for p1 in param1_values
+        ]
+        # prepend system_cls and N
+        tasks = [
+            (self.system_cls, t[0], self.N, t[1], *t[2:])
+            for t in tasks
+        ]
+
+        if verbose:
+            print(f"Escape map (fixed N={self.N}): "
+                  f"{len(param1_values)}×{len(param2_values)} = {len(tasks)} points "
+                  f"on {self.n_jobs} workers …")
+
+        t0 = time.time()
+        with mp.Pool(processes=self.n_jobs) as pool:
+            raw = pool.map(_escape_map_worker, tasks)
+        if verbose:
+            print(f"Done in {time.time() - t0:.1f} s")
+
+        n1, n2 = len(param1_values), len(param2_values)
+        escaped     = np.array([r[0] for r in raw], dtype=bool).reshape(n2, n1)
+        escape_time = np.array([r[1] for r in raw], dtype=float).reshape(n2, n1)
+
+        return EscapeMapResult(
+            param1_values=param1_values,
+            param2_values=param2_values,
+            escaped=escaped,
+            escape_time=escape_time,
+            param1_name=param1_name,
+            param2_name=param2_name,
+        )
+
+    def compute_min_N(
+        self,
+        param1_name:   str,
+        param1_values: np.ndarray,
+        param2_name:   str = "epsilon",
+        param2_values: Optional[np.ndarray] = None,
+        N_min:         int = 1,
+        N_max:         int = 10_000,
+        n_trials:      int = 3,
+        seed:          int = 42,
+        verbose:       bool = True,
+    ) -> EscapeMinNResult:
+        """
+        Min-N sweep: for each (p1, p2) find the smallest N that keeps the
+        system bounded.  Coloured by log₁₀(N_c); grey where always-escaping.
+
+        A point is considered "escaping at N" if any of the n_trials
+        independent runs (different seeds) escape.
+        """
+        param1_values = np.asarray(param1_values)
+        param2_values = np.asarray(
+            param2_values if param2_values is not None
+            else np.linspace(0.0, 0.5, 40)
+        )
+
+        tasks = []
+        for p2 in param2_values:
+            for p1 in param1_values:
+                params, epsilon = self._build_params(p1, param1_name, p2, param2_name)
+                tasks.append((
+                    self.system_cls, params, epsilon,
+                    self.dt, self.steps, self.window, self.threshold,
+                    N_min, N_max, n_trials, seed,
+                ))
+
+        if verbose:
+            print(f"Escape map (min-N): "
+                  f"{len(param1_values)}×{len(param2_values)} = {len(tasks)} points, "
+                  f"N_max={N_max}, n_trials={n_trials}, workers={self.n_jobs} …")
+
+        t0 = time.time()
+        with mp.Pool(processes=self.n_jobs) as pool:
+            raw = pool.map(_escape_min_N_worker, tasks)
+        if verbose:
+            print(f"Done in {time.time() - t0:.1f} s")
+
+        n1, n2 = len(param1_values), len(param2_values)
+        min_N = np.array(raw, dtype=float).reshape(n2, n1)
+
+        return EscapeMinNResult(
+            param1_values=param1_values,
+            param2_values=param2_values,
+            min_N=min_N,
+            param1_name=param1_name,
+            param2_name=param2_name,
+            N_max=N_max,
+        )
+
+
+class EscapeMapPlotter:
+
+    @staticmethod
+    def _finish(fig, output, show):
+        if output:
+            fig.savefig(output, dpi=200, bbox_inches="tight")
+            print(f"Saved → {output}")
+        if show:
+            plt.show()
+        if not show:
+            plt.close(fig)
+
+    @staticmethod
+    def plot(
+        result: EscapeMapResult,
+        output: Optional[str] = None,
+        show:   bool = False,
+        cmap:   str  = "viridis",
+        title:  Optional[str] = None,
+    ) -> None:
+        """
+        Fixed-N escape map.
+        Bounded → grey.  Escaped → coloured by escape time.
+        """
+        from matplotlib.patches import Patch
+
+        esc_time = result.escape_time.copy()
+        cm_ = plt.cm.get_cmap(cmap).copy()
+        cm_.set_bad(color="#CCCCCC")
+
+        # ε on x-axis, a (param1) on y-axis → transpose
+        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        im = ax.pcolormesh(
+            result.param2_values, result.param1_values, esc_time.T,
+            cmap=cm_, vmin=np.nanmin(esc_time), vmax=np.nanmax(esc_time),
+            shading="nearest",
+        )
+        if result.escaped.any() and not result.escaped.all():
+            ax.contour(result.param2_values, result.param1_values,
+                       result.escaped.T.astype(float),
+                       levels=[0.5], colors="black", linewidths=0.8)
+
+        fig.colorbar(im, ax=ax, pad=0.02, label="Escape time")
+        ax.legend(handles=[Patch(facecolor="#CCCCCC", edgecolor="black",
+                                 linewidth=0.5, label="Bounded")],
+                  loc="best", fontsize=8)
+        ax.set_xlabel(result.param2_name, fontsize=12)
+        ax.set_ylabel(result.param1_name, fontsize=12)
+        ax.set_title(title or "Escape Map", fontsize=13)
+        EscapeMapPlotter._finish(fig, output, show)
+
+    @staticmethod
+    def plot_min_N(
+        result: EscapeMinNResult,
+        output: Optional[str] = None,
+        show:   bool = False,
+        cmap:   str  = "plasma",
+        title:  Optional[str] = None,
+    ) -> None:
+        """
+        Min-N escape map.
+        Colour = log₁₀(N_c).  Grey = always escapes (N_c > N_max).
+        Black contour marks the escape boundary.
+        """
+        from matplotlib.patches import Patch
+
+        log_N = np.where(np.isnan(result.min_N), np.nan, np.log10(result.min_N))
+        cm_ = plt.cm.get_cmap(cmap).copy()
+        cm_.set_bad(color="#CCCCCC")
+
+        vmin, vmax = np.nanmin(log_N), np.nanmax(log_N)
+
+        # ε on x-axis, a (param1) on y-axis → transpose
+        fig, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        im = ax.pcolormesh(
+            result.param2_values, result.param1_values, log_N.T,
+            cmap=cm_, vmin=vmin, vmax=vmax, shading="nearest",
+        )
+
+        escape_mask = np.isnan(result.min_N)
+        if escape_mask.any() and not escape_mask.all():
+            ax.contour(result.param2_values, result.param1_values,
+                       escape_mask.T.astype(float),
+                       levels=[0.5], colors="black", linewidths=0.8)
+
+        cbar = fig.colorbar(im, ax=ax, pad=0.02)
+        cbar.set_label(r"$\log_{10}(N_c)$", fontsize=10)
+        tick_vals = np.linspace(vmin, vmax, 5)
+        cbar.set_ticks(tick_vals)
+        cbar.set_ticklabels([rf"$10^{{{v:.1f}}}$" for v in tick_vals])
+
+        ax.legend(
+            handles=[Patch(facecolor="#CCCCCC", edgecolor="black", linewidth=0.5,
+                           label=rf"Always escapes ($N>{result.N_max}$)")],
+            loc="best", fontsize=8,
+        )
+        ax.set_xlabel(result.param2_name, fontsize=12)
+        ax.set_ylabel(result.param1_name, fontsize=12)
+        ax.set_title(title or "Escape Map — min $N$", fontsize=13)
+        EscapeMapPlotter._finish(fig, output, show)
+
+
+# ════════════════════════════════════════
+# 14. Histogram
+# ════════════════════════════════════════
+
+class HistogramPlotter:
+    """
+    Plot histograms of state-component distributions from a SimulationResult.
+
+    Each subplot shows the distribution of one component (x, y, z, …)
+    pooled across all oscillators and all time steps in the tail window.
+    Optionally overlays a Gaussian fit.
+    """
+
+    @staticmethod
+    def plot(
+        result:      "SimulationResult",
+        output:      Optional[str] = None,
+        show:        bool  = False,
+        bins:        int   = 60,
+        gaussian_fit: bool = True,
+        title:       Optional[str] = None,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        result       : SimulationResult from SimulationRunner.run()
+        bins         : number of histogram bins
+        gaussian_fit : overlay a Gaussian with the same mean and std
+        output       : save path; skipped if None
+        show         : display interactively
+        """
+        tail   = result.tail          # (window, N, dim)
+        labels = result.system.labels
+        dim    = result.system.dim
+        colors = ["#1f77b4", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+
+        fig, axes = plt.subplots(1, dim, figsize=(5 * dim, 4),
+                                 constrained_layout=True)
+        if dim == 1:
+            axes = [axes]
+
+        for idx, (ax, lab) in enumerate(zip(axes, labels)):
+            data = tail[:, :, idx].ravel()   # pool time × oscillators
+
+            ax.hist(data, bins=bins, density=True,
+                    color=colors[idx % len(colors)], alpha=0.7,
+                    edgecolor="white", linewidth=0.3)
+
+            if gaussian_fit:
+                mu, sigma = data.mean(), data.std()
+                x = np.linspace(data.min(), data.max(), 300)
+                ax.plot(x, np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+                        / (sigma * np.sqrt(2 * np.pi)),
+                        color="black", linewidth=1.2,
+                        label=rf"$\mathcal{{N}}({mu:.2f},\,{sigma:.2f}^2)$")
+                ax.legend(fontsize=8)
+
+            ax.set_xlabel(rf"${lab}$", fontsize=12)
+            ax.set_ylabel("Density", fontsize=11)
+            ax.set_title(rf"Distribution of ${lab}$", fontsize=11)
+
+        sys_info = repr(result.system)
+        fig.suptitle(title or f"State Distributions — {sys_info}", fontsize=12)
+
+        if output:
+            fig.savefig(output, dpi=200, bbox_inches="tight")
+            print(f"Saved → {output}")
+
+        if show:
+            plt.show()
+
+        if not show:
+            plt.close(fig)
+
+
 if __name__ == "__main__":
     main()

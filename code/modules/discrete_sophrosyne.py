@@ -1436,6 +1436,130 @@ class CoupledMapLattice:
         data = np.load(fpath, allow_pickle=True)
         return dict(data)
 
+    # ══════════════════════════════════════════════════════════════════════
+    # ANALYSIS 9: Element-state histogram
+    # ══════════════════════════════════════════════════════════════════════
+    def analysis_element_histogram(
+        self,
+        N,
+        eps,
+        T_total=200_000,
+        T_transient=100_000,
+        bins=60,
+        gaussian_fit=True,
+        seed=None,
+        output=None,
+        show=True,
+    ):
+        """
+        Run the system and plot histograms of individual element states
+        at steady state, one panel per state component.
+
+        For 1-D maps (tent, logistic): one panel (x).
+        For 2-D maps (Lozi): two panels (x, y).
+
+        Overlays the mean-field h_t distribution as a step histogram
+        and optionally a Gaussian fit.
+
+        Parameters
+        ----------
+        N            : number of elements
+        eps          : coupling strength
+        T_total      : total iterations
+        T_transient  : iterations discarded as transient
+        bins         : histogram bins
+        gaussian_fit : overlay Gaussian with same mean/std
+        output       : file path to save; None → skip
+        show         : display interactively
+
+        Returns
+        -------
+        dict with 'components' (list of flat arrays) and 'h_series'.
+        """
+        print("=" * 60)
+        print(f"ANALYSIS 9: Element histogram  ({self.name}, N={N}, eps={eps})")
+        print("=" * 60)
+
+        f    = self.obs_fn
+        step = self.step_fn
+        init = self.init_fn
+
+        rng   = np.random.default_rng(seed)
+        state = init(N, rng)
+
+        T_rec         = T_total - T_transient
+        h_series      = np.empty(T_rec)
+        state_history = None
+
+        for t in range(T_total):
+            f_val = f(state)
+            h     = np.mean(f_val)
+            state = step(state, f_val, eps, h)
+
+            if t >= T_transient:
+                i = t - T_transient
+                h_series[i] = h
+
+                comps = list(state) if isinstance(state, tuple) else [state]
+
+                if state_history is None:
+                    state_history = [np.empty((T_rec, N)) for _ in comps]
+
+                for c, arr in enumerate(comps):
+                    state_history[c][i] = arr
+
+        components  = [sh.ravel() for sh in state_history]
+        n_comp      = len(components)
+        comp_labels = ['x', 'y', 'z'][:n_comp]
+
+        _apply_style()
+        fig, axes = plt.subplots(
+            1, n_comp,
+            figsize=(FIG_WIDTH_2COL * (0.55 * n_comp), 3.5),
+            constrained_layout=True,
+        )
+        if n_comp == 1:
+            axes = [axes]
+
+        for ax, data, lab in zip(axes, components, comp_labels):
+            ax.hist(data, bins=bins, density=True,
+                    color=_color(0), alpha=0.75,
+                    edgecolor='white', linewidth=0.3,
+                    label='Elements')
+
+            ax.hist(h_series, bins=bins, density=True,
+                    color=_color(1), alpha=0.9,
+                    histtype='step', linewidth=1.0,
+                    label=r'$h_t$ (mean field)')
+
+            if gaussian_fit:
+                mu, sigma = data.mean(), data.std()
+                x     = np.linspace(data.min(), data.max(), 300)
+                gauss = (np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+                         / (sigma * np.sqrt(2 * np.pi)))
+                ax.plot(x, gauss, color='black', linewidth=0.9, ls='--',
+                        label=rf'$\mathcal{{N}}({mu:.2f},\,{sigma:.2f}^2)$')
+
+            ax.set_xlabel(rf'${lab}$')
+            ax.set_ylabel('Density')
+            ax.set_title(rf'Distribution of ${lab}$  '
+                         rf'($N={N}$, $\varepsilon={eps}$)')
+            ax.legend(fontsize=6.5)
+
+        fig.suptitle(f'Element Distributions — {self.param_label}', fontsize=10)
+
+        if output:
+            fig.savefig(output, dpi=300, bbox_inches='tight')
+            print(f"  -> Saved {output}")
+
+        if show:
+            plt.show()
+
+        if not show:
+            plt.close(fig)
+
+        return {'components': components, 'h_series': h_series}
+
     # ── Convenience: run all standard analyses ─────────────────────────────
     def run_all(self, eps, N_values=(100, 1000, 10000, 100000)):
         """Run analyses 1-5 with the given coupling strength."""
