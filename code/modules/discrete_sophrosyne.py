@@ -1196,6 +1196,179 @@ class CoupledMapLattice:
 
         return results_param, results_N
 
+    # ══════════════════════════════════════════════════════════════════════
+    # ANALYSIS 8: 2-D escape phase diagram  (a  vs  ε,  N_c as colorbar)
+    # ══════════════════════════════════════════════════════════════════════
+    def analysis_escape_phase_diagram(
+        self,
+        map_factory,
+        a_range=(1.0, 2.0),
+        eps_range=(0.0, 0.5),
+        n_a=40,
+        n_eps=40,
+        N_min=1,
+        N_max=10_000,
+        T_total=4_000,
+        x_bound=20,
+        n_trials=3,
+        seed=42,
+        n_jobs=1,
+        sweep_label='a',
+        cmap='viridis',
+        output=None,
+        show=True,
+    ):
+        """
+        Sweep (a, ε) on a 2-D grid and find the minimum N that prevents
+        escape at each point.  Produces a heatmap with:
+
+          - colour  → log₁₀(N_c)  for bounded points
+          - grey    → always escapes (N_c = None even at N_max)
+
+        Parameters
+        ----------
+        map_factory  : callable  a → CoupledMapLattice  (or plain obs_fn)
+        a_range      : (a_min, a_max) — x-axis range
+        eps_range    : (eps_min, eps_max) — y-axis range
+        n_a, n_eps   : grid resolution
+        N_min, N_max : search bracket for binary search over N
+        T_total      : integration length per trial
+        x_bound      : escape threshold  |x| > x_bound → escaped
+        n_trials     : independent trials per (a, ε) point
+        n_jobs       : joblib parallel workers (-1 = all cores)
+        sweep_label  : string label for the a-axis (LaTeX-safe, no $)
+        output       : file path to save (None → skip)
+        show         : display interactively
+
+        Returns
+        -------
+        dict with keys 'a_values', 'eps_values', 'N_grid'
+            N_grid[i, j] = N_c at (a_values[j], eps_values[i]),
+            or np.nan where the system always escapes.
+        """
+        a_values   = np.linspace(a_range[0],   a_range[1],   n_a)
+        eps_values = np.linspace(eps_range[0],  eps_range[1], n_eps)
+
+        # Build flat list of all (row, col, a, eps) tasks
+        tasks = [
+            (i, j, a_values[j], eps_values[i])
+            for i in range(n_eps)
+            for j in range(n_a)
+        ]
+
+        comm, rank, size = self._mpi()
+
+        if rank == 0:
+            print("=" * 60)
+            print(f"ANALYSIS 8: Escape phase diagram  ({self.name})")
+            print(f"  grid: {n_a} × {n_eps} = {len(tasks)} points"
+                  f",  N_max={N_max}"
+                  f",  {'MPI ×' + str(size) if size > 1 else 'n_jobs=' + str(n_jobs)}")
+            print("=" * 60)
+
+        def _worker(i, j, a, eps):
+            f_obs, f_step, f_init = self._resolve_factory(a, map_factory)
+            Nc = self.find_min_N(
+                eps,
+                N_min=N_min, N_max=N_max,
+                T_total=T_total, x_bound=x_bound,
+                n_trials=n_trials, seed=seed,
+                obs_fn=f_obs, step_fn=f_step, init_fn=f_init,
+            )
+            return i, j, Nc
+
+        if size > 1:    # ── MPI path ──────────────────────────────────────
+            my_indices = range(rank, len(tasks), size)
+            my_results = [_worker(*tasks[k]) for k in my_indices]
+            all_gathered = comm.gather(my_results, root=0)
+            if rank != 0:
+                return None
+            results = sorted(
+                [r for sub in all_gathered for r in sub],
+                key=lambda r: (r[0], r[1]),
+            )
+        else:           # ── joblib path ───────────────────────────────────
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(_worker)(i, j, a, eps)
+                for i, j, a, eps in tasks
+            )
+
+        # Assemble into 2-D grid (nan where always-escaping)
+        N_grid = np.full((n_eps, n_a), np.nan)
+        for i, j, Nc in results:
+            if Nc is not None:
+                N_grid[i, j] = float(Nc)
+
+        # ── Plot ──────────────────────────────────────────────────────────
+        _apply_style()
+
+        fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, FIG_WIDTH_2COL * 0.7))
+
+        # Mask of always-escaping cells
+        escape_mask = np.isnan(N_grid)
+
+        # Log-scale colormap for N_c (only finite cells)
+        plot_data = np.where(escape_mask, np.nan, np.log10(N_grid))
+        vmin = np.nanmin(plot_data)
+        vmax = np.nanmax(plot_data)
+
+        cmap = plt.cm.get_cmap(cmap).copy()
+        cmap.set_bad(color='#CCCCCC')   # grey for always-escaping cells
+
+        # ε on x-axis, a on y-axis → transpose the grid
+        im = ax.pcolormesh(
+            eps_values, a_values, plot_data.T,
+            cmap=cmap, vmin=vmin, vmax=vmax,
+            shading='nearest',
+        )
+
+        # Overlay escape boundary as a contour
+        if not np.all(escape_mask) and not np.all(~escape_mask):
+            ax.contour(
+                eps_values, a_values, escape_mask.T.astype(float),
+                levels=[0.5], colors='black', linewidths=0.8,
+            )
+
+        cbar = fig.colorbar(im, ax=ax, pad=0.02)
+        cbar.set_label(r'$\log_{10}(N_c)$', fontsize=10)
+
+        # Restore tick labels as actual N values
+        tick_vals = np.linspace(vmin, vmax, 5)
+        cbar.set_ticks(tick_vals)
+        cbar.set_ticklabels([rf'$10^{{{v:.1f}}}$' for v in tick_vals])
+
+        ax.set_xlabel(r'$\varepsilon$', fontsize=11)
+        ax.set_ylabel(rf'${sweep_label}$', fontsize=11)
+        ax.set_title(
+            rf'Escape phase diagram — min $N$ to stay bounded'
+            rf'  ({self.name})',
+            fontsize=10,
+        )
+
+        # Grey patch legend entry for always-escaping region
+        # from matplotlib.patches import Patch
+        # legend_elements = [
+        #     Patch(facecolor='#CCCCCC', edgecolor='black', linewidth=0.5,
+        #           label=rf'Always escapes ($N > {N_max}$)'),
+        # ]
+        # ax.legend(handles=legend_elements, loc='best', fontsize=7.5)
+
+        if output:
+            fig.savefig(output, dpi=300, bbox_inches='tight')
+            print(f"  -> Saved {output}")
+
+        if show:
+            plt.show()
+
+        if not show:
+            plt.close(fig)
+
+        return {
+            'a_values':   a_values,
+            'eps_values': eps_values,
+            'N_grid':     N_grid,
+        }
+
     # ── Data persistence ───────────────────────────────────────────────────
     def save_data(self, data, fname):
         """

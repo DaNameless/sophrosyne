@@ -41,6 +41,9 @@ from typing import Optional, Type, Dict, Any, Tuple, List
 import os
 import time
 import warnings
+import multiprocessing as mp
+from scipy.signal import find_peaks
+from scipy.integrate import solve_ivp
 
 # ──────────────────────────────────────────────
 # Optional heavy imports (graceful degradation)
@@ -366,7 +369,7 @@ class RK4Integrator:
     """
     4th-order Runge-Kutta integrator for coupled dynamical systems.
 
-    Mean fields are recomputed at every RK4 sub-stage for full-order
+    Mean fields are recomputed at every RK4 stage for full-order
     accuracy on the coupled system (no operator splitting).
 
     Parameters
@@ -396,23 +399,20 @@ class RK4Integrator:
         sys = self.system
 
         # k1
-        m1 = sys._compute_means(s)
-        k1 = sys.slope(t, s, m1)
+        m = sys._compute_means(s)
+        k1 = sys.slope(t, s, m)
 
         # k2
         s2 = s + 0.5 * dt * k1
-        m2 = sys._compute_means(s2)
-        k2 = sys.slope(t + 0.5 * dt, s2, m2)
+        k2 = sys.slope(t + 0.5 * dt, s2, m)
 
         # k3
         s3 = s + 0.5 * dt * k2
-        m3 = sys._compute_means(s3)
-        k3 = sys.slope(t + 0.5 * dt, s3, m3)
+        k3 = sys.slope(t + 0.5 * dt, s3, m)
 
         # k4
         s4 = s + dt * k3
-        m4 = sys._compute_means(s4)
-        k4 = sys.slope(t + dt, s4, m4)
+        k4 = sys.slope(t + dt, s4, m)
 
         return s + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
@@ -555,7 +555,7 @@ class SimulationRunner:
         steps: int = 200_000,
         threshold: float = 100.0,
         window: int = 5000,
-        ic_spread: float = 0.1,
+        ic_spread: float = 0.6,
         ic_dist: str = "uniform",
         save_full: bool = False,
         seed: Optional[int] = None,
@@ -787,18 +787,34 @@ class Plotter:
     Publication-quality plots for simulation results.
 
     All methods are static — no state is kept between calls.
-    Plots are saved to disk and figures are closed to free memory.
+
+    Parameters common to all methods
+    ---------------------------------
+    output_dir : directory to save the PNG; if None, nothing is saved
+    show       : if True, display interactively via plt.show()
     """
 
     @staticmethod
-    def plot_tail_timeseries(result: SimulationResult, output_dir: str = ".",
-                             max_traces: int = 10):
+    def _finish(fig, fname: Optional[str], show: bool) -> None:
+        """Save and/or show a figure, then close it."""
+        if fname is not None:
+            fig.savefig(fname, dpi=200, bbox_inches="tight")
+            print(f"Saved plot → {fname}")
+        if show:
+            plt.show()
+        if not show:
+            plt.close(fig)
+
+    @staticmethod
+    def plot_tail_timeseries(
+        result: SimulationResult,
+        output_dir: Optional[str] = None,
+        show: bool = False,
+        max_traces: int = 10,
+    ):
         """
         Plot the rolling-buffer tail: individual traces (gray) + mean (color).
-
-        Saves one PNG with subplots for each component.
         """
-        os.makedirs(output_dir, exist_ok=True)
         tail = result.tail
         means = result.means_tail
         t = result.t_tail
@@ -826,15 +842,19 @@ class Plotter:
         sys_info = repr(result.system)
         fig.suptitle(f"Tail Time Series — {sys_info}", fontsize=18)
 
-        fname = _safe_filename(result, "tail_timeseries", output_dir)
-        fig.savefig(fname, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        print(f"Saved plot → {fname}")
+        fname = _safe_filename(result, "tail_timeseries", output_dir) if output_dir else None
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        Plotter._finish(fig, fname, show)
 
     @staticmethod
-    def plot_attractor_3d(result: SimulationResult, output_dir: str = ".",
-                          components: Tuple[int, int, int] = (0, 1, 2),
-                          fraction: float = 0.5):
+    def plot_attractor_3d(
+        result: SimulationResult,
+        output_dir: Optional[str] = None,
+        show: bool = False,
+        components: Tuple[int, int, int] = (0, 1, 2),
+        fraction: float = 0.5,
+    ):
         """
         Plot the 3D phase-space attractor from the mean trajectory tail,
         colored by time progression.
@@ -848,12 +868,10 @@ class Plotter:
             warnings.warn("3D attractor requires dim >= 3, skipping.")
             return
 
-        os.makedirs(output_dir, exist_ok=True)
         means = result.means_tail
         labels = result.system.labels
         ci, cj, ck = components
 
-        # Use the last `fraction` of the tail
         n = max(2, int(fraction * len(means)))
         x = means[-n:, ci]
         y = means[-n:, cj]
@@ -884,18 +902,21 @@ class Plotter:
         sys_info = repr(result.system)
         fig.suptitle(f"Mean Attractor — {sys_info}", fontsize=16)
 
-        fname = _safe_filename(result, "attractor_3d", output_dir)
-        fig.savefig(fname, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        print(f"Saved plot → {fname}")
+        fname = _safe_filename(result, "attractor_3d", output_dir) if output_dir else None
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        Plotter._finish(fig, fname, show)
 
     @staticmethod
-    def plot_sigma_evolution(result: SimulationResult, output_dir: str = "."):
+    def plot_sigma_evolution(
+        result: SimulationResult,
+        output_dir: Optional[str] = None,
+        show: bool = False,
+    ):
         """
         Plot the time evolution of the standard deviation across oscillators
         for each component, using the tail buffer.
         """
-        os.makedirs(output_dir, exist_ok=True)
         tail = result.tail
         t = result.t_tail
         labels = result.system.labels
@@ -916,17 +937,21 @@ class Plotter:
         sys_info = repr(result.system)
         fig.suptitle(f"Dispersion — {sys_info}", fontsize=16)
 
-        fname = _safe_filename(result, "sigma", output_dir)
-        fig.savefig(fname, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        print(f"Saved plot → {fname}")
+        fname = _safe_filename(result, "sigma", output_dir) if output_dir else None
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        Plotter._finish(fig, fname, show)
 
     @staticmethod
-    def plot_all(result: SimulationResult, output_dir: str = "."):
+    def plot_all(
+        result: SimulationResult,
+        output_dir: Optional[str] = None,
+        show: bool = False,
+    ):
         """Generate all standard plots."""
-        Plotter.plot_tail_timeseries(result, output_dir)
-        Plotter.plot_attractor_3d(result, output_dir)
-        Plotter.plot_sigma_evolution(result, output_dir)
+        Plotter.plot_tail_timeseries(result, output_dir=output_dir, show=show)
+        Plotter.plot_attractor_3d(result, output_dir=output_dir, show=show)
+        Plotter.plot_sigma_evolution(result, output_dir=output_dir, show=show)
 
 
 # ══════════════════════════════════════════════
@@ -1694,6 +1719,363 @@ def main():
         if args.plot:
             SweepPlotter.plot_all(result, args.output_dir)
 
+
+# ════════════════════════════════════════
+# 12. Bifurcation Diagram
+# ════════════════════════════════════════
+
+# ── Module-level workers (must be top-level for multiprocessing pickling) ──
+
+def _bif_worker(args: tuple) -> dict:
+    """
+    N=1 worker: integrates with DOP853 (adaptive, high-accuracy).
+    All components extracted from the same trajectory.
+    Integration is terminated early if the trajectory escapes (|y| > threshold).
+    """
+    system_cls, params, ic, t_transient, t_steady, dt, peak_keep, peak_distance, threshold = args
+
+    system = system_cls(**params)
+    dim    = system.dim
+    labels = system.labels
+
+    t_end       = t_transient + t_steady
+    t_eval      = np.arange(0.0, t_end + dt / 2.0, dt)
+    steady_mask = t_eval >= t_transient
+
+    def rhs(t, y):
+        s     = y.reshape(1, dim)
+        means = {f"x{i}": float(s[0, i]) for i in range(dim)}
+        return system.slope(t, s, means).ravel()
+
+    def escape_event(t, y):
+        return threshold - np.max(np.abs(y))
+    escape_event.terminal  = True   # stop integration on trigger
+    escape_event.direction = -1     # only trigger when crossing downward (i.e. |y| growing past threshold)
+
+    out = {
+        "peaks": {lab: np.empty(0) for lab in labels},
+        "fixed": {lab: np.nan     for lab in labels},
+    }
+
+    try:
+        sol = solve_ivp(
+            rhs,
+            (t_eval[0], t_eval[-1]),
+            np.asarray(ic, dtype=float),
+            t_eval=t_eval,
+            method="DOP853",
+            rtol=1e-8,
+            atol=1e-8,
+            dense_output=False,
+            events=escape_event,
+        )
+
+        # Escaped or solver failed → return empty (no data for this param value)
+        if sol.status == 1 or not sol.success:
+            return out
+
+        steady = sol.y[:, steady_mask]   # (dim, n_steady)
+
+        for idx, lab in enumerate(labels):
+            _extract_peaks(steady[idx], lab, peak_idx_fn=find_peaks,
+                           peak_distance=peak_distance, peak_keep=peak_keep, out=out)
+
+    except Exception:
+        pass
+
+    return out
+
+
+def _bif_worker_coupled(args: tuple) -> dict:
+    """
+    N>1 worker: uses SimulationRunner (RK4 + rolling buffer).
+    Memory cost is O(window × N × dim) regardless of total run length.
+    Extracts signal from the mean field or a single oscillator.
+    """
+    (system_cls, params, N, epsilon, steps, window, dt,
+     peak_keep, peak_distance, variable, oscillator_index) = args
+
+    runner = SimulationRunner(
+        system_cls=system_cls,
+        system_params=params,
+        N=N,
+        epsilon=epsilon,
+        dt=dt,
+        steps=steps,
+        window=window,
+        verbose=False,
+    )
+    result = runner.run()
+
+    labels = result.system.labels
+
+    out = {
+        "peaks": {lab: np.empty(0) for lab in labels},
+        "fixed": {lab: np.nan     for lab in labels},
+    }
+
+    # Discard escaped trajectories — tail data is unreliable after divergence
+    if result.escape.escaped:
+        return out
+
+    for idx, lab in enumerate(labels):
+        if variable == "mean":
+            sig = result.means_tail[:, idx]
+        else:
+            sig = result.tail[:, oscillator_index, idx]
+
+        _extract_peaks(sig, lab, peak_idx_fn=find_peaks,
+                       peak_distance=peak_distance, peak_keep=peak_keep, out=out)
+
+    return out
+
+
+def _extract_peaks(sig, lab, peak_idx_fn, peak_distance, peak_keep, out):
+    """Shared peak-extraction logic used by both workers."""
+    peak_idx, _ = peak_idx_fn(sig, distance=peak_distance)
+    if peak_idx.size:
+        sel = peak_idx[-min(peak_keep, peak_idx.size):]
+        out["peaks"][lab] = sig[sel]
+    else:
+        out["fixed"][lab] = float(np.mean(sig))
+
+
+@dataclass
+class BifurcationResult:
+    param_values: np.ndarray
+    peaks: Dict[str, List[np.ndarray]]  # label -> one array of maxima per param value
+    fixed: Dict[str, np.ndarray]        # label -> fixed-point value per param (nan if oscillatory)
+    param_name: str
+    labels: List[str]
+
+
+class BifurcationAnalyzer:
+    """
+    Compute bifurcation diagrams for any DynamicalSystem in SOPHROSYNE.
+
+    Two backends are selected automatically:
+      - N=1, epsilon=0 → DOP853 via solve_ivp (adaptive, high-accuracy)
+      - N>1  or  epsilon>0 → SimulationRunner (RK4 + rolling buffer, memory-efficient)
+
+    Parameters
+    ----------
+    system_cls      : DynamicalSystem subclass
+    base_params     : fixed system parameters (do not include the swept parameter)
+    N               : number of coupled oscillators
+    epsilon         : coupling strength (only used when N>1)
+    ic              : initial condition for N=1 mode (defaults to system.default_ic)
+    t_transient     : time discarded as transient
+    t_steady        : time analysed after the transient
+    dt              : time step (t_eval step for DOP853; fixed step for RK4)
+    peak_keep       : number of last peaks to retain per component per param value
+    min_peak_period : minimum time between consecutive peaks (time units)
+    threshold       : escape threshold — integration stopped when |y| > threshold (N=1 only)
+    variable        : "mean" (ensemble mean field) or "single" (one oscillator); N>1 only
+    oscillator_index: which oscillator to track when variable="single"
+    n_jobs          : parallel workers; None → os.cpu_count()
+    """
+
+    def __init__(
+        self,
+        system_cls: Type[DynamicalSystem],
+        base_params: Optional[Dict[str, Any]] = None,
+        N: int = 1,
+        epsilon: float = 0.0,
+        ic: Optional[np.ndarray] = None,
+        t_transient: float = 2000.0,
+        t_steady: float = 2000.0,
+        dt: float = 0.01,
+        peak_keep: int = 20,
+        min_peak_period: float = 0.5,
+        threshold: float = 100.0,
+        variable: str = "mean",
+        oscillator_index: int = 0,
+        n_jobs: Optional[int] = None,
+    ):
+        self.system_cls       = system_cls
+        self.base_params      = base_params or {}
+        self.N                = N
+        self.epsilon          = epsilon
+        self.t_transient      = t_transient
+        self.t_steady         = t_steady
+        self.dt               = dt
+        self.peak_keep        = peak_keep
+        self.peak_distance    = max(1, int(min_peak_period / dt))
+        self.threshold        = threshold
+        self.variable         = variable
+        self.oscillator_index = oscillator_index
+        self.n_jobs           = n_jobs or os.cpu_count() or 1
+
+        # Coupled mode: convert real time to step counts for SimulationRunner
+        self._steps  = int((t_transient + t_steady) / dt)
+        self._window = int(t_steady / dt)
+
+        # N=1 mode: resolve IC
+        if ic is not None:
+            self.ic = np.asarray(ic, dtype=float)
+        else:
+            tmp = system_cls(**self.base_params)
+            self.ic = tmp.default_ic.astype(float)
+
+    @property
+    def _coupled(self) -> bool:
+        return self.N > 1 or self.epsilon != 0.0
+
+    def compute(
+        self,
+        param_name: str,
+        param_values: np.ndarray,
+        verbose: bool = True,
+    ) -> BifurcationResult:
+        """
+        Sweep `param_name` over `param_values` in parallel.
+
+        All state-space components are computed per integration. Fixed points
+        (no peaks detected) are stored separately so they remain visible in the plot.
+        """
+        param_values = np.asarray(param_values)
+
+        if self._coupled:
+            args_list = [
+                (
+                    self.system_cls,
+                    {**self.base_params, param_name: float(v)},
+                    self.N,
+                    self.epsilon,
+                    self._steps,
+                    self._window,
+                    self.dt,
+                    self.peak_keep,
+                    self.peak_distance,
+                    self.variable,
+                    self.oscillator_index,
+                )
+                for v in param_values
+            ]
+            worker = _bif_worker_coupled
+            mode   = f"N={self.N}, ε={self.epsilon}, variable='{self.variable}' [RK4]"
+        else:
+            args_list = [
+                (
+                    self.system_cls,
+                    {**self.base_params, param_name: float(v)},
+                    self.ic,
+                    self.t_transient,
+                    self.t_steady,
+                    self.dt,
+                    self.peak_keep,
+                    self.peak_distance,
+                    self.threshold,
+                )
+                for v in param_values
+            ]
+            worker = _bif_worker
+            mode   = "N=1 [DOP853]"
+
+        if verbose:
+            print(f"Bifurcation sweep: {len(param_values)} values of '{param_name}' "
+                  f"on {self.n_jobs} workers — {mode} …")
+
+        t0 = time.time()
+        with mp.Pool(processes=self.n_jobs) as pool:
+            raw = pool.map(worker, args_list)
+        if verbose:
+            print(f"Done in {time.time() - t0:.1f} s")
+
+        tmp    = self.system_cls(**self.base_params)
+        labels = tmp.labels
+
+        peaks: Dict[str, List[np.ndarray]] = {lab: [] for lab in labels}
+        fixed: Dict[str, List[float]]      = {lab: [] for lab in labels}
+
+        for res in raw:
+            for lab in labels:
+                peaks[lab].append(res["peaks"][lab])
+                fixed[lab].append(res["fixed"][lab])
+
+        return BifurcationResult(
+            param_values=param_values,
+            peaks=peaks,
+            fixed={lab: np.asarray(fixed[lab]) for lab in labels},
+            param_name=param_name,
+            labels=labels,
+        )
+
+
+# ════════════════════════════════════════
+# PLOTTING
+# ════════════════════════════════════════
+
+class BifurcationPlotter:
+
+    @staticmethod
+    def plot(
+        result: BifurcationResult,
+        output: Optional[str] = None,
+        show: bool = False,
+        max_points: int = 200_000,
+        title: Optional[str] = None,
+        markersize: float = 0.3,
+    ) -> None:
+        """
+        Three-panel bifurcation diagram, one subplot per state-space component.
+
+        Oscillatory regimes → black scatter (peaks).
+        Fixed-point regimes → red scatter (mean value).
+
+        Parameters
+        ----------
+        output     : file path to save (PNG/EPS/…); skipped if None
+        show       : display interactively
+        max_points : max scatter points per panel (uniform downsampling)
+        markersize : dot size for oscillatory scatter
+        """
+        labels = result.labels
+        n      = len(labels)
+
+        fig, axes = plt.subplots(n, 1, figsize=(10, 4 * n),
+                                 sharex=True, constrained_layout=True)
+        if n == 1:
+            axes = [axes]
+
+        for ax, lab in zip(axes, labels):
+            x_osc, y_osc = [], []
+            x_fp,  y_fp  = [], []
+
+            for param, pk_arr, fval in zip(
+                result.param_values,
+                result.peaks[lab],
+                result.fixed[lab],
+            ):
+                if pk_arr.size > 0:
+                    stride  = max(1, pk_arr.size // max_points)
+                    sampled = pk_arr[::stride]
+                    x_osc.extend([param] * len(sampled))
+                    y_osc.extend(sampled)
+                elif not np.isnan(fval):
+                    x_fp.append(param)
+                    y_fp.append(fval)
+
+            if x_osc:
+                ax.scatter(x_osc, y_osc, s=markersize, color="black", linewidths=0)
+            if x_fp:
+                ax.scatter(x_fp, y_fp, s=markersize * 3, color="tomato", linewidths=0)
+
+            ax.set_ylabel(f"Maxima of ${lab}(t)$", fontsize=12)
+            ax.grid(True, linewidth=0.2)
+
+        axes[-1].set_xlabel(result.param_name, fontsize=13)
+        fig.suptitle(title or "Bifurcation Diagram", fontsize=14)
+
+        if output:
+            fig.savefig(output, dpi=200, bbox_inches="tight")
+            print(f"Saved → {output}")
+
+        if show:
+            plt.show()
+
+        if not show:
+            plt.close(fig)
 
 if __name__ == "__main__":
     main()
