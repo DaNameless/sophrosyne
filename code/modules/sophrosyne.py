@@ -878,6 +878,8 @@ class Plotter:
         """
         Plot the rolling-buffer tail: individual traces (gray) + mean (color).
         """
+        if output_dir is None and not show:
+            return
         tail = result.tail
         means = result.means_tail
         t = result.t_tail
@@ -927,6 +929,8 @@ class Plotter:
         components : tuple of 3 component indices to plot
         fraction   : fraction of the tail to use (from the end)
         """
+        if output_dir is None and not show:
+            return
         if result.system.dim < 3:
             warnings.warn("3D attractor requires dim >= 3, skipping.")
             return
@@ -980,6 +984,8 @@ class Plotter:
         Plot the time evolution of the standard deviation across oscillators
         for each component, using the tail buffer.
         """
+        if output_dir is None and not show:
+            return
         tail = result.tail
         t = result.t_tail
         labels = result.system.labels
@@ -2094,6 +2100,8 @@ class BifurcationPlotter:
         max_points : max scatter points per panel (uniform downsampling)
         markersize : dot size for oscillatory scatter
         """
+        if not output and not show:
+            return
         labels = result.labels
         n      = len(labels)
 
@@ -2442,6 +2450,8 @@ class EscapeMapPlotter:
         Fixed-N escape map.
         Bounded → grey.  Escaped → coloured by escape time.
         """
+        if not output and not show:
+            return
         from matplotlib.patches import Patch
 
         esc_time = result.escape_time.copy()
@@ -2482,6 +2492,8 @@ class EscapeMapPlotter:
         Colour = log₁₀(N_c).  Grey = always escapes (N_c > N_max).
         Black contour marks the escape boundary.
         """
+        if not output and not show:
+            return
         from matplotlib.patches import Patch
 
         log_N = np.where(np.isnan(result.min_N), np.nan, np.log10(result.min_N))
@@ -2567,6 +2579,8 @@ class HistogramPlotter:
         output          : save path; skipped if None
         show            : display interactively
         """
+        if not output and not show:
+            return
         tail   = result.tail          # (window, N, dim)
         labels = result.system.labels
         dim    = result.system.dim

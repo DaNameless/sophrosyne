@@ -407,7 +407,7 @@ class CoupledMapLattice:
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 1: Time series visualization
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_timeseries(self, eps, N_values=(100, 1000, 10000, 100000), T_show=200, T_transient=100000, plot=True):
+    def analysis_timeseries(self, eps, N_values=(100, 1000, 10000, 100000), T_show=200, T_transient=100000, output=None, show=False):
         """
         Returns
         -------
@@ -424,7 +424,7 @@ class CoupledMapLattice:
             h_data[N] = h[:T_show]
             print(f"  N={N:>6d}:  sigma = {np.std(h_data[N]):.5f}")
 
-        if plot:
+        if output is not None or show:
             _apply_style()
             fig, axes = plt.subplots(len(N_values), 1,
                                      figsize=(FIG_WIDTH_2COL, 2.2 * len(N_values)),
@@ -444,18 +444,20 @@ class CoupledMapLattice:
                          rf'$\varepsilon={eps}$)',
                          fontsize=11, y=1.01)
             plt.tight_layout()
-            fname = f'./{self.name}_eps{eps}_timeseries.png'
-            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-            plt.show()
-            plt.close()
-            print(f"  -> Saved {fname}\n")
+            if output:
+                fig.savefig(output, dpi=300, bbox_inches='tight')
+                print(f"  -> Saved {output}")
+            if show:
+                plt.show()
+            if not show:
+                plt.close(fig)
 
         return h_data
 
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 2: Fluctuation scaling  sigma_h  vs  N
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_fluctuation_scaling(self, eps, N_values=(100, 1000, 10000, 100000), T_show=2000, T_transient=100000, plot=True):
+    def analysis_fluctuation_scaling(self, eps, N_values=(100, 1000, 10000, 100000), T_show=2000, T_transient=100000, output=None, show=False):
         """
         Returns
         -------
@@ -489,7 +491,7 @@ class CoupledMapLattice:
               f"  (R^2 = {r**2:.6f})")
         print(f"  Expected: -0.5000,  Deviation: {abs(slope + 0.5):.4f}")
 
-        if plot:
+        if output is not None or show:
             _apply_style()
             fig, axes = plt.subplots(1, 2, figsize=(FIG_WIDTH_2COL, 3.2))
 
@@ -526,11 +528,13 @@ class CoupledMapLattice:
             _panel_label(ax, '(b)')
 
             plt.tight_layout()
-            fname = f'./{self.name}_eps{eps}_scaling.png'
-            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-            plt.show()
-            plt.close()
-            print(f"  -> Saved {fname}\n")
+            if output:
+                fig.savefig(output, dpi=300, bbox_inches='tight')
+                print(f"  -> Saved {output}")
+            if show:
+                plt.show()
+            if not show:
+                plt.close(fig)
 
         return {
             'N_values':  N_arr,
@@ -544,7 +548,7 @@ class CoupledMapLattice:
     # ══════════════════════════════════════════════════════════════════════
     # ANALYSIS 3: Distribution of h_t and rescaled collapse
     # ══════════════════════════════════════════════════════════════════════
-    def analysis_distribution(self, eps, N_values=(100, 1000, 10000, 100000), T_show=2000, T_transient=100000, plot=True):
+    def analysis_distribution(self, eps, N_values=(100, 1000, 10000, 100000), T_show=2000, T_transient=100000, output=None, show=False):
         """
         Returns
         -------
@@ -584,7 +588,7 @@ class CoupledMapLattice:
         last_key = next(
             (N for N in reversed(N_values) if N in all_rescaled), None)
 
-        if plot:
+        if output is not None or show:
             if last_key is None:
                 print("  All simulations diverged. Skipping plots.")
             else:
@@ -630,11 +634,13 @@ class CoupledMapLattice:
                 _panel_label(axes[2], '(c)')
 
                 plt.tight_layout()
-                fname = f'./{self.name}_eps{eps}_distribution.png'
-                plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-                plt.show()
-                plt.close()
-                print(f"  -> Saved {fname}\n")
+                if output:
+                    fig.savefig(output, dpi=300, bbox_inches='tight')
+                    print(f"  -> Saved {output}")
+                if show:
+                    plt.show()
+                if not show:
+                    plt.close(fig)
 
         return {
             'h_series':     h_series,
@@ -648,7 +654,7 @@ class CoupledMapLattice:
     # ANALYSIS 4: Self-consistency check
     # ══════════════════════════════════════════════════════════════════════
     def analysis_self_consistency(self, eps, h_range=(0.01, 0.99), N_sc=10000,
-                                  T_sc=200000, T_trans_sc=50000, T_transient=100000, T_show=2000, plot=True):
+                                  T_sc=200000, T_trans_sc=50000, T_transient=100000, T_show=2000, output=None, show=False):
         """
         Parameters
         ----------
@@ -696,7 +702,7 @@ class CoupledMapLattice:
         if h_star_list:
             print(f"  |diff| = {abs(h_star_list[0] - h_sim_mean):.6f}")
 
-        if plot:
+        if output is not None or show:
             _apply_style()
             fig, ax = plt.subplots(figsize=(FIG_WIDTH_1COL * 1.8, 3.5))
             ax.plot(h_candidates, f_averages, color=_color(0), ls=_ls(0),
@@ -718,11 +724,13 @@ class CoupledMapLattice:
             ax.legend()
 
             plt.tight_layout()
-            fname = f'./{self.name}_eps{eps}_self_consistency.png'
-            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-            plt.show()
-            plt.close()
-            print(f"  -> Saved {fname}\n")
+            if output:
+                fig.savefig(output, dpi=300, bbox_inches='tight')
+                print(f"  -> Saved {output}")
+            if show:
+                plt.show()
+            if not show:
+                plt.close(fig)
 
         return {
             'h_candidates': h_candidates,
@@ -737,7 +745,7 @@ class CoupledMapLattice:
     # ══════════════════════════════════════════════════════════════════════
     def analysis_phase_diagram(self, eps_values=None,
                                N_values=(100, 1000, 10000, 100000),
-                               n_jobs=1, plot=True):
+                               n_jobs=1, output=None, show=False):
         """
         Returns
         -------
@@ -786,7 +794,7 @@ class CoupledMapLattice:
         alphas       = np.array([r[1] for r in all_results])
         alpha_errors = np.array([r[2] for r in all_results])
 
-        if plot:
+        if output is not None or show:
             _apply_style()
             fig, axes = plt.subplots(1, 2, figsize=(FIG_WIDTH_2COL, 3.2))
 
@@ -827,11 +835,13 @@ class CoupledMapLattice:
             _panel_label(ax, '(b)')
 
             plt.tight_layout()
-            fname = f'./{self.name}_phase_diagram.png'
-            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-            plt.show()
-            plt.close()
-            print(f"  -> Saved {fname}\n")
+            if output:
+                fig.savefig(output, dpi=300, bbox_inches='tight')
+                print(f"  -> Saved {output}")
+            if show:
+                plt.show()
+            if not show:
+                plt.close(fig)
 
         return {
             'eps_values':   eps_values,
@@ -847,7 +857,7 @@ class CoupledMapLattice:
                             map_factory=None, param_range=(0.5, 2.0),
                             h_bar=0.65, n_param=500,
                             T_iter=10000, T_trans=9500, sweep_label=None, x_lim=None, y_lim=None,
-                            component=0, plot=True):
+                            component=0, output=None, show=False):
         """
         Bifurcation diagram of the single-site map driven by a fixed h_bar.
 
@@ -918,7 +928,7 @@ class CoupledMapLattice:
         all_param = np.array(all_param)
         all_x     = np.array(all_x)
 
-        if plot:
+        if output is not None or show:
             _apply_style()
             fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4.5))
             ax.scatter(all_param, all_x, s=0.02, c='#000000', alpha=0.3,
@@ -937,12 +947,13 @@ class CoupledMapLattice:
             ax.set_ylim(y_lim)
 
             plt.tight_layout()
-            comp_suffix = f'_c{component}' if component != 0 else ''
-            fname = f'./{self.name}_bifurcation_{bifurcation_param}{comp_suffix}.png'
-            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-            plt.show()
-            plt.close()
-            print(f"  -> Saved {fname}\n")
+            if output:
+                fig.savefig(output, dpi=300, bbox_inches='tight')
+                print(f"  -> Saved {output}")
+            if show:
+                plt.show()
+            if not show:
+                plt.close(fig)
 
         return {'param': all_param, 'x': all_x}
 
@@ -956,7 +967,7 @@ class CoupledMapLattice:
                                        N=10000, n_param=500,
                                        sweep_label=None,
                                        T_total=100000, T_transient=95500,
-                                       seed=42, n_jobs=1, plot=True):
+                                       seed=42, n_jobs=1, output=None, show=False):
         """
         Bifurcation diagram of the mean field h_t from the full
         N-body simulation.
@@ -1035,7 +1046,7 @@ class CoupledMapLattice:
         all_h     = np.array([h for _, h in all_pairs])
         print(f"  Total points: {len(all_h)}")
 
-        if plot:
+        if output is not None or show:
             _apply_style()
             fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL, 4.0))
             ax.scatter(all_param, all_h, s=0.05, c='#000000', alpha=0.4,
@@ -1050,12 +1061,13 @@ class CoupledMapLattice:
                 ax.set_ylim(y_lo - margin, y_hi + margin)
 
             plt.tight_layout()
-            fname = (f'./{self.name}_meanfield_bif_{sweep}_'
-                     f'{fixed_label_file}_N{N}.png')
-            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-            plt.show()
-            plt.close()
-            print(f"  -> Saved {fname}\n")
+            if output:
+                fig.savefig(output, dpi=300, bbox_inches='tight')
+                print(f"  -> Saved {output}")
+            if show:
+                plt.show()
+            if not show:
+                plt.close(fig)
 
         return {'param': all_param, 'h': all_h}
 
@@ -1087,7 +1099,7 @@ class CoupledMapLattice:
                               param_range=(1.0, 3.0),
                               n_param=60, N_min=1, N_max=100000,
                               T_total=100000, x_bound=20, n_trials=3,
-                              seed=42, n_jobs=1, sweep_label=None, plot=True):
+                              seed=42, n_jobs=1, sweep_label=None, output=None, show=False):
         """
         sweep : 'eps' or 'map_param' (requires map_factory).
         sweep_label : str, optional
@@ -1167,7 +1179,7 @@ class CoupledMapLattice:
         p_inf    = [p for p, n in zip(results_param, results_N)
                     if n is None]
 
-        if plot:
+        if output is not None or show:
             _apply_style()
             fig, ax = plt.subplots(figsize=(FIG_WIDTH_2COL * 0.75, 3.5))
             if p_finite:
@@ -1188,11 +1200,13 @@ class CoupledMapLattice:
             ax.legend()
 
             plt.tight_layout()
-            fname = f'./{self.name}_min_N_escape_{sweep}.png'
-            plt.savefig(self._savepath(fname), dpi=300, bbox_inches='tight')
-            plt.show()
-            plt.close()
-            print(f"  -> Saved {fname}\n")
+            if output:
+                fig.savefig(output, dpi=300, bbox_inches='tight')
+                print(f"  -> Saved {output}")
+            if show:
+                plt.show()
+            if not show:
+                plt.close(fig)
 
         return results_param, results_N
 
