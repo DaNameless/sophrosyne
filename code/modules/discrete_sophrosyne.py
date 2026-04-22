@@ -268,6 +268,10 @@ class CoupledMapLattice:
 
         The obs_fn/step_fn/init_fn overrides let sweep methods inject a
         different map without mutating self (used internally).
+
+        Memory note: transient iterations are run in a separate warm-up loop
+        without allocating any storage.  Only the steady-state h_series
+        (length T_total - T_transient) is ever written to memory.
         """
         f    = obs_fn  or self.obs_fn
         step = step_fn or self.step_fn
@@ -275,14 +279,20 @@ class CoupledMapLattice:
 
         rng   = np.random.default_rng(seed)
         state = init(N, rng)
-        h_series = np.empty(T_total - T_transient)
 
-        for t in range(T_total):
+        # Warm-up: run transient without storing anything
+        for _ in range(T_transient):
             f_val = f(state)
-            h     = np.mean(f_val)
-            if t >= T_transient:
-                h_series[t - T_transient] = h
-            state = step(state, f_val, eps, h)
+            state = step(state, f_val, eps, np.mean(f_val))
+
+        # Recording: only allocate and store steady-state h
+        T_rec    = T_total - T_transient
+        h_series = np.empty(T_rec)
+        for t in range(T_rec):
+            f_val       = f(state)
+            h           = np.mean(f_val)
+            h_series[t] = h
+            state       = step(state, f_val, eps, h)
 
         return h_series
 
@@ -311,29 +321,27 @@ class CoupledMapLattice:
         rng   = np.random.default_rng(seed)
         state = init(N, rng)
 
-        T_rec = T_total - T_transient
-        # record the x-component of each tracked particle and h_t
-        x_tracks = np.empty((T_rec, n_show))
-        h_series = np.empty(T_rec)
-
         # pick n_show particle indices to track
         rng2    = np.random.default_rng((seed or 0) + 1)
         indices = rng2.choice(N, size=n_show, replace=False)
 
-        for t in range(T_total):
+        # Warm-up: run transient without allocating track arrays
+        for _ in range(T_transient):
+            f_val = f(state)
+            state = step(state, f_val, eps, np.mean(f_val))
+
+        # Recording: allocate and fill only the steady-state window
+        T_rec    = T_total - T_transient
+        x_tracks = np.empty((T_rec, n_show))
+        h_series = np.empty(T_rec)
+
+        for t in range(T_rec):
             f_val = f(state)
             h     = np.mean(f_val)
             state = step(state, f_val, eps, h)
-
-            if t >= T_transient:
-                i = t - T_transient
-                h_series[i] = h
-                # extract the requested component (works for 1D array or tuple)
-                if isinstance(state, tuple):
-                    x = state[component]
-                else:
-                    x = state
-                x_tracks[i] = x[indices]
+            h_series[t] = h
+            x = state[component] if isinstance(state, tuple) else state
+            x_tracks[t] = x[indices]
 
         time = np.arange(T_rec)
         comp_label = (r'$x$', r'$y$', r'$z$')[component] if component < 3 else rf'$s_{{{component}}}$'
@@ -672,12 +680,16 @@ class CoupledMapLattice:
         print("=" * 60)
 
         def single_site_average(h_bar):
+            # Memory note: transient is run first without accumulation,
+            # then only the steady-state average is collected.
             state = self.init_fn(1, np.random.default_rng(0))
-            total = 0.0
-            for t in range(T_sc):
+            for _ in range(T_trans_sc):
                 f_val = self.obs_fn(state)
-                if t >= T_trans_sc:
-                    total += float(f_val[0])
+                state = self.step_fn(state, f_val, eps, h_bar)
+            total = 0.0
+            for _ in range(T_sc - T_trans_sc):
+                f_val = self.obs_fn(state)
+                total += float(f_val[0])
                 state = self.step_fn(state, f_val, eps, h_bar)
             return total / (T_sc - T_trans_sc)
 
@@ -1503,26 +1515,28 @@ class CoupledMapLattice:
         rng   = np.random.default_rng(seed)
         state = init(N, rng)
 
+        # Warm-up: run transient without allocating any storage.
+        # All state and h values from this phase are discarded immediately.
+        for _ in range(T_transient):
+            f_val = f(state)
+            state = step(state, f_val, eps, np.mean(f_val))
+
+        # Recording: allocate only what's needed for the steady-state window.
         T_rec         = T_total - T_transient
         h_series      = np.empty(T_rec)
         state_history = None
 
-        for t in range(T_total):
+        for t in range(T_rec):
             f_val = f(state)
             h     = np.mean(f_val)
             state = step(state, f_val, eps, h)
+            h_series[t] = h
 
-            if t >= T_transient:
-                i = t - T_transient
-                h_series[i] = h
-
-                comps = list(state) if isinstance(state, tuple) else [state]
-
-                if state_history is None:
-                    state_history = [np.empty((T_rec, N)) for _ in comps]
-
-                for c, arr in enumerate(comps):
-                    state_history[c][i] = arr
+            comps = list(state) if isinstance(state, tuple) else [state]
+            if state_history is None:
+                state_history = [np.empty((T_rec, N)) for _ in comps]
+            for c, arr in enumerate(comps):
+                state_history[c][t] = arr
 
         components  = [sh.ravel() for sh in state_history]
         n_comp      = len(components)

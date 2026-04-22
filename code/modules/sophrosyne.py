@@ -1800,6 +1800,11 @@ def _bif_worker(args: tuple) -> dict:
     N=1 worker: integrates with DOP853 (adaptive, high-accuracy).
     All components extracted from the same trajectory.
     Integration is terminated early if the trajectory escapes (|y| > threshold).
+
+    Memory note: t_eval only covers [t_transient, t_end], so solve_ivp
+    stores solution values only for the steady-state window.  The solver
+    still integrates through the transient using adaptive internal steps,
+    but those intermediate states are never written to memory.
     """
     (system_cls, params, ic, t_transient, t_steady, dt,
      peak_keep, peak_distance, threshold) = args
@@ -1808,9 +1813,10 @@ def _bif_worker(args: tuple) -> dict:
     dim    = system.dim
     labels = system.labels
 
-    t_end       = t_transient + t_steady
-    t_eval      = np.arange(0.0, t_end + dt / 2.0, dt)
-    steady_mask = t_eval >= t_transient
+    t_end  = t_transient + t_steady
+    # Only request output from t_transient onward — transient steps are
+    # integrated internally by the solver without being stored.
+    t_eval = np.arange(t_transient, t_end + dt / 2.0, dt)
 
     def rhs(t, y):
         s     = y.reshape(1, dim)
@@ -1830,7 +1836,7 @@ def _bif_worker(args: tuple) -> dict:
     try:
         sol = solve_ivp(
             rhs,
-            (t_eval[0], t_eval[-1]),
+            (0.0, t_end),           # integrate from t=0, but only store from t_transient
             np.asarray(ic, dtype=float),
             t_eval=t_eval,
             method="DOP853",
@@ -1844,7 +1850,7 @@ def _bif_worker(args: tuple) -> dict:
         if sol.status == 1 or not sol.success:
             return out
 
-        steady = sol.y[:, steady_mask]   # (dim, n_steady)
+        steady = sol.y   # (dim, n_steady) — already only steady-state points
 
         for idx, lab in enumerate(labels):
             _extract_peaks(steady[idx], lab, peak_idx_fn=find_peaks,
