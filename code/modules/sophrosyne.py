@@ -636,9 +636,16 @@ class SimulationRunner:
         self.seed = seed
         self.verbose = verbose
 
-        # Build system
+        # Build system.
+        # For N=1 the mean field equals the single oscillator's value at every
+        # RK4 stage k1, so coupling is zero.  However, the frozen-field RK4
+        # (mean computed once from s, reused for k2/k3/k4) introduces a
+        # spurious ε-dependent force at the substages because the stale mean
+        # no longer equals the intermediate state values.  Forcing epsilon=0
+        # for N=1 eliminates this artefact while leaving N>1 unchanged.
         params = system_params or {}
-        self.system = system_cls(epsilon=epsilon, **params)
+        effective_epsilon = 0.0 if N == 1 else epsilon
+        self.system = system_cls(epsilon=effective_epsilon, **params)
         self.integrator = RK4Integrator(self.system, dt)
         self.detector = EscapeDetector(threshold)
 
