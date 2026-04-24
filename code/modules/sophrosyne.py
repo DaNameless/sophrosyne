@@ -2254,6 +2254,28 @@ class EscapeMinNResult:
     param2_name:   str
     N_max:         int
 
+    def trim(self, param1_range=None, param2_range=None) -> "EscapeMinNResult":
+        """
+        Return a new EscapeMinNResult restricted to the given ranges.
+
+        Parameters
+        ----------
+        param1_range : (lo, hi) or None
+        param2_range : (lo, hi) or None
+        """
+        p1, p2, Z = self.param1_values, self.param2_values, self.min_N
+        if param1_range is not None:
+            mask = (p1 >= param1_range[0]) & (p1 <= param1_range[1])
+            p1, Z = p1[mask], Z[:, mask]
+        if param2_range is not None:
+            mask = (p2 >= param2_range[0]) & (p2 <= param2_range[1])
+            p2, Z = p2[mask], Z[mask, :]
+        return EscapeMinNResult(
+            param1_values=p1, param2_values=p2, min_N=Z,
+            param1_name=self.param1_name, param2_name=self.param2_name,
+            N_max=self.N_max,
+        )
+
 
 class EscapeMapAnalyzer:
     """
@@ -2436,6 +2458,157 @@ class EscapeMapAnalyzer:
             param1_name=param1_name,
             param2_name=param2_name,
             N_max      =N_max,
+        )
+
+    def compute_min_N_adaptive(
+        self,
+        param1_name:   str,
+        param1_range:  tuple,
+        param2_name:   str   = "epsilon",
+        param2_range:  tuple = (0.0, 1.0),
+        coarse_res:    int   = 20,
+        fine_res:      int   = 100,
+        tol:           float = 0.5,
+        margin_frac:   float = 0.05,
+        N_min:         int   = 1,
+        N_max:         int   = 10_000,
+        n_trials:      int   = 3,
+        seed:          int   = 42,
+        verbose:       bool  = True,
+    ) -> "Optional[EscapeMinNResult]":
+        """
+        Two-pass adaptive min-N sweep.
+
+        Pass 1 runs a coarse grid over the full (param1, param2) domain.
+        Pass 2 concentrates a fine grid in the region where N_c transitions:
+        cells adjacent to a nan↔finite boundary or where neighbouring log₁₀(N_c)
+        values differ by more than *tol*.
+
+        Both passes call compute_min_N internally, so MPI parallelism is fully
+        preserved.  The two results are merged with nearest-neighbour
+        interpolation onto a uniform output grid at *fine_res* resolution.
+
+        Returns None on non-root MPI ranks.
+        """
+        from scipy.interpolate import griddata
+
+        comm, rank, size = self._mpi()
+
+        p1_min, p1_max = param1_range
+        p2_min, p2_max = param2_range
+
+        # ── Pass 1: coarse grid over full domain ──────────────────────────
+        p1_coarse = np.linspace(p1_min, p1_max, coarse_res)
+        p2_coarse = np.linspace(p2_min, p2_max, coarse_res)
+
+        coarse_result = self.compute_min_N(
+            param1_name, p1_coarse,
+            param2_name, p2_coarse,
+            N_min=N_min, N_max=N_max,
+            n_trials=n_trials, seed=seed, verbose=verbose,
+        )
+
+        # ── Detect active region on rank 0, then broadcast ────────────────
+        if rank == 0:
+            Z     = coarse_result.min_N   # shape (coarse_res, coarse_res)
+            log_Z = np.where(np.isfinite(Z), np.log10(np.maximum(Z, 1.0)), np.nan)
+            active = np.zeros_like(Z, dtype=bool)
+
+            # Horizontal neighbors (along param1)
+            a, b = log_Z[:, :-1], log_Z[:, 1:]
+            flag = ((np.isnan(a) != np.isnan(b)) |
+                    (np.isfinite(a) & np.isfinite(b) & (np.abs(a - b) > tol)))
+            active[:, :-1] |= flag
+            active[:, 1:]  |= flag
+
+            # Vertical neighbors (along param2)
+            a, b = log_Z[:-1, :], log_Z[1:, :]
+            flag = ((np.isnan(a) != np.isnan(b)) |
+                    (np.isfinite(a) & np.isfinite(b) & (np.abs(a - b) > tol)))
+            active[:-1, :] |= flag
+            active[1:,  :] |= flag
+
+            rows, cols = np.where(active)
+            if len(rows) == 0:
+                region = (p1_min, p1_max, p2_min, p2_max, False)
+            else:
+                c_lo = max(0,            cols.min() - 1)
+                c_hi = min(coarse_res-1, cols.max() + 1)
+                r_lo = max(0,            rows.min() - 1)
+                r_hi = min(coarse_res-1, rows.max() + 1)
+                p1_lo, p1_hi = p1_coarse[c_lo], p1_coarse[c_hi]
+                p2_lo, p2_hi = p2_coarse[r_lo], p2_coarse[r_hi]
+
+                p1_span = p1_hi - p1_lo or (p1_max - p1_min)
+                p2_span = p2_hi - p2_lo or (p2_max - p2_min)
+                p1_lo = max(p1_min, p1_lo - margin_frac * p1_span)
+                p1_hi = min(p1_max, p1_hi + margin_frac * p1_span)
+                p2_lo = max(p2_min, p2_lo - margin_frac * p2_span)
+                p2_hi = min(p2_max, p2_hi + margin_frac * p2_span)
+
+                region = (p1_lo, p1_hi, p2_lo, p2_hi, True)
+        else:
+            region = None
+
+        if size > 1:
+            region = comm.bcast(region, root=0)
+
+        p1_lo, p1_hi, p2_lo, p2_hi, has_active = region
+
+        if not has_active:
+            if verbose and rank == 0:
+                print("No active region — returning coarse result.")
+            return coarse_result   # None on non-root ranks
+
+        if verbose and rank == 0:
+            print(f"Active region: {param1_name}=[{p1_lo:.4f}, {p1_hi:.4f}], "
+                  f"{param2_name}=[{p2_lo:.4f}, {p2_hi:.4f}]")
+
+        # ── Pass 2: fine grid over active region ──────────────────────────
+        p1_fine = np.linspace(p1_lo, p1_hi, fine_res)
+        p2_fine = np.linspace(p2_lo, p2_hi, fine_res)
+
+        fine_result = self.compute_min_N(
+            param1_name, p1_fine,
+            param2_name, p2_fine,
+            N_min=N_min, N_max=N_max,
+            n_trials=n_trials, seed=seed, verbose=verbose,
+        )
+
+        if rank != 0:
+            return None
+
+        # ── Merge onto full-domain output grid ────────────────────────────
+        p1_out = np.linspace(p1_min, p1_max, fine_res)
+        p2_out = np.linspace(p2_min, p2_max, fine_res)
+        P1_out, P2_out = np.meshgrid(p1_out, p2_out)
+
+        P1_c, P2_c = np.meshgrid(p1_coarse, p2_coarse)
+        P1_f, P2_f = np.meshgrid(p1_fine,   p2_fine)
+
+        # Encode nan as -1 (all valid N_c ≥ 1) so griddata can handle it
+        def _enc(arr):
+            return np.where(np.isfinite(arr), arr, -1.0)
+
+        pts = np.column_stack([
+            np.concatenate([P1_c.ravel(), P1_f.ravel()]),
+            np.concatenate([P2_c.ravel(), P2_f.ravel()]),
+        ])
+        vals = np.concatenate([
+            _enc(coarse_result.min_N.ravel()),
+            _enc(fine_result.min_N.ravel()),
+        ])
+
+        merged = griddata(pts, vals, (P1_out, P2_out), method='nearest')
+        merged = np.where(merged < 0, np.nan, merged)
+
+        return EscapeMinNResult(
+            param1_values=p1_out,
+            param2_values=p2_out,
+            min_N        =merged,
+            param1_name  =param1_name,
+            param2_name  =param2_name,
+            N_max        =N_max,
         )
 
 
